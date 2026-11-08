@@ -14,9 +14,14 @@
 //   Con el código de la vivienda en `code`:
 //   POST { action: 'state', code }                        -> todo lo de la pantalla principal
 //   POST { action: 'post' | 'post-del' | 'post-pin', code, … }            (tablón; solo cargos)
-//   POST { action: 'chat-poll', code, after }             -> { msgs, open, blocked }
-//   POST { action: 'chat-send', code, text }              -> { s }
-//   POST { action: 'chat-del' | 'chat-open' | 'block', code, … }          (moderación; solo cargos)
+//   POST { action: 'chat-poll', code, room?, after }      -> { msgs, open, blocked }   (room: 'general' o un chat con miembros)
+//   POST { action: 'chat-send', code, room?, text }       -> { s }
+//   POST { action: 'chat-del' | 'chat-open' | 'block', code, room?, … }   (moderación; solo cargos)
+//   POST { action: 'room-create' | 'room-edit' | 'room-del', code, … }    (cargos: chats con solo algunas viviendas)
+//   Llamadas con la presidencia (WebRTC: la voz y el vídeo van directos entre móviles; aquí solo pasan las señales):
+//   POST { action: 'ice', code }                          -> { iceServers }   (STUN, y TURN si Vercel tiene las claves de Cloudflare)
+//   POST { action: 'call-send', code, mid?, device, sig } -> { s }   (sig: { k: ring|accept|reject|busy|offer|answer|end, cid, to?, sdp?, video? })
+//   POST { action: 'call-poll', code, mid?, after }       -> { signals }
 //   POST { action: 'dm-get', code, mid? }                 -> { msgs }   (vecino: su conversación; cargos: la de `mid`)
 //   POST { action: 'dm-send', code, text, mid? }          -> { ok }
 //   POST { action: 'poll-create' | 'poll-close' | 'poll-del', code, … }   (encuestas; solo cargos)
@@ -80,6 +85,13 @@ const MAX_PARTS = 12;          // ≈12 MB por archivo (la app limita a 10 MB)
 const MAX_FILES = 5;           // archivos por anuncio
 const UPLOAD_TTL_S = 86400;    // un archivo subido que no llega a publicarse se borra al día
 const MAX_ICON = 160000;       // icono de la comunidad (JPEG pequeño en base64)
+const MAX_ROOMS = 20;          // chats además del general
+const MAX_SIG = 60000;         // señal de llamada (descripción de la conexión; con vídeo es larga)
+const CALL_TTL_S = 120;        // las señales solo sirven mientras se conecta la llamada
+const CALL_RING_MS = 45e3;     // lo que suena una llamada sin contestar
+const KEEP_SIGS = 60;
+const STUN = [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun.cloudflare.com:3478'] }];
+let turnCache = null;          // credenciales TURN de Cloudflare (duran un día; se renuevan cada hora)
 const PUSH_TTL_S = 24 * 3600;  // un aviso que no llega en un día ya no se entrega
 const KEEP_NOTES = 20;         // avisos pendientes por dispositivo
 const NOTES_TTL_S = 7 * 86400;
@@ -141,7 +153,44 @@ const K = {
   notes: (d) => `vec:n:${d}`,
   file: (cid, fid, part) => `vec:c:${cid}:f:${fid}:${part}`,
   icon: (cid) => `vec:c:${cid}:icon`,
+  roomChat: (cid, room) => (room === 'general' ? `vec:c:${cid}:chat` : `vec:c:${cid}:chat:${room}`),
+  roomSeq: (cid, room) => (room === 'general' ? `vec:c:${cid}:cs` : `vec:c:${cid}:cs:${room}`),
+  calls: (cid, mid) => `vec:c:${cid}:call:${mid}`,
+  callSeq: (cid, mid) => `vec:c:${cid}:callseq:${mid}`,
+  rings: (cid) => `vec:c:${cid}:rings`,
 };
+
+// Chats: el general (todas las viviendas) y los que creen los cargos con algunas viviendas
+function roomOf(com, id) {
+  if (!id || id === 'general') return { id: 'general', name: 'Todos los vecinos', members: null, open: com.chatOpen !== false };
+  return (com.rooms || []).find((r) => r.id === id) || null;
+}
+const canSee = (com, room, mid) => !!room && (isAdmin(com, mid) || !room.members || room.members.includes(mid));
+const visibleRooms = (com, mid) => [roomOf(com, 'general'), ...(com.rooms || [])].filter((r) => canSee(com, r, mid));
+
+// Servidores para conectar las llamadas: STUN siempre; TURN (Cloudflare) si Vercel tiene
+// CF_TURN_KEY_ID y CF_TURN_API_TOKEN: con datos móviles suele hacer falta para que conecten.
+async function iceServers() {
+  const env = process.env;
+  if (env.CF_TURN_KEY_ID && env.CF_TURN_API_TOKEN) {
+    if (turnCache && Date.now() - turnCache.at < 3600e3) return turnCache.servers;
+    try {
+      const res = await fetch(`https://rtc.live.cloudflare.com/v1/turn/keys/${env.CF_TURN_KEY_ID}/credentials/generate-ice-servers`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${env.CF_TURN_API_TOKEN}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ttl: 86400 }),
+      });
+      const json = await res.json();
+      if (res.ok && Array.isArray(json.iceServers)) {
+        const servers = json.iceServers.map((x) => ({ ...x, urls: [].concat(x.urls).filter((u) => !/:53(\?|$)/.test(u)) })).filter((x) => x.urls.length);
+        turnCache = { at: Date.now(), servers: [...STUN, ...servers] };
+        return turnCache.servers;
+      }
+    } catch (_) { /* se sigue sin TURN */ }
+  }
+  if (env.TURN_URLS && env.TURN_USER && env.TURN_PASS) return [...STUN, { urls: env.TURN_URLS.split(',').map((u) => u.trim()), username: env.TURN_USER, credential: env.TURN_PASS }];
+  return STUN;
+}
 const fileKeys = (cid, files) => (files || []).flatMap((f) => Array.from({ length: f.parts }, (_, i) => K.file(cid, f.fid, i)));
 function cleanFiles(list) {
   if (!Array.isArray(list)) return [];
@@ -200,7 +249,7 @@ async function notify(cid, com, to, skip, note) {
     for (let i = 0; i < flat.length; i += 2) {
       const [device, mid] = [flat[i], flat[i + 1]];
       if (mid === skip || !com.units[mid]) continue;
-      if (to === 'all' || (to === 'admins' && isAdmin(com, mid)) || to === mid) targets.push(device);
+      if (to === 'all' || (to === 'admins' && isAdmin(com, mid)) || to === mid || (Array.isArray(to) && (to.includes(mid) || isAdmin(com, mid)))) targets.push(device);
     }
     if (!targets.length) return;
     const n = JSON.stringify({ ...note, t: Date.now() });
@@ -318,7 +367,7 @@ module.exports = async (req, res) => {
     return res.status(req.method === 'GET' ? 200 : 503).json({ configured: false, error: 'not-configured', vars });
   }
   if (req.method === 'GET') {
-    try { await redis('PING'); return res.status(200).json({ configured: true }); } catch (err) { return res.status(200).json({ configured: false, error: `redis: ${err.message}` }); }
+    try { await redis('PING'); const ice = await iceServers(); return res.status(200).json({ configured: true, turn: ice.length > STUN.length ? 'ok' : 'sin-claves' }); } catch (err) { return res.status(200).json({ configured: false, error: `redis: ${err.message}` }); }
   }
   if (req.method !== 'POST') return res.status(405).json({ error: 'method' });
 
@@ -420,14 +469,23 @@ module.exports = async (req, res) => {
       }
       case 'state': {
         if (Date.now() - (me.seen || 0) > 3600e3) { me.seen = Date.now(); await saveCom(); }
-        const [board, polls, chatTail, dmIndex, reqs] = await Promise.all([
+        const rooms = visibleRooms(com, mid);
+        const [board, polls, tails, dmIndex, reqs, ringsRaw] = await Promise.all([
           getJSON(K.board(cid), []),
           loadPolls(cid, com),
-          redis('LRANGE', K.chat(cid), -1, -1),
+          pipeline(rooms.map((r) => ['LRANGE', K.roomChat(cid, r.id), -1, -1])),
           redis('HGETALL', K.dmIndex(cid)),
           admin ? getJSON(K.req(cid), []) : [],
+          redis('HGETALL', K.rings(cid)),
         ]);
-        const last = chatTail && chatTail[0] ? JSON.parse(chatTail[0]) : null;
+        // Llamadas sonando para esta vivienda: de la presidencia a ella, o (cargos) de un vecino a la presidencia
+        const rings = [];
+        for (let i = 0; i < (ringsRaw || []).length; i += 2) {
+          const r = JSON.parse(ringsRaw[i + 1]);
+          if (Date.now() - r.t > CALL_RING_MS) continue;
+          const thread = ringsRaw[i];
+          if (admin ? !r.fromRole && com.units[thread] : thread === mid && r.fromRole) rings.push({ thread, ...r, label: unitName(com, thread) });
+        }
         const idx = {};
         for (let i = 0; i < (dmIndex || []).length; i += 2) idx[dmIndex[i]] = JSON.parse(dmIndex[i + 1]);
         const out = {
@@ -435,7 +493,11 @@ module.exports = async (req, res) => {
           me: { mid, label: me.label, role, blocked: !!me.blocked },
           board: board.slice().reverse().map((p) => ({ ...p, byLabel: p.by ? unitName(com, p.by) : '' })),
           polls: polls.slice().reverse().map((p) => pollView(p, com, mid)),
-          chat: last ? { s: last.s, t: last.t, mine: last.mid === mid } : { s: 0, t: 0 },
+          rooms: rooms.map((r, i) => {
+            const last = tails[i] && tails[i][0] ? JSON.parse(tails[i][0]) : null;
+            return { id: r.id, name: r.name, members: r.members ? r.members.filter((m) => com.units[m]) : null, open: r.open !== false, last: last ? { s: last.s, t: last.t, mine: last.mid === mid } : { s: 0, t: 0 } };
+          }),
+          rings,
           dm: idx[mid] || null,
         };
         if (admin) {
@@ -481,43 +543,127 @@ module.exports = async (req, res) => {
 
       // ----- Chat de vecinos -----
       case 'chat-poll': {
+        const room = roomOf(com, body.room);
+        if (!canSee(com, room, mid)) return bad('gone', 404);
         const after = Math.max(0, Number(body.after) || 0);
-        const raw = await redis('LRANGE', K.chat(cid), after ? -KEEP_CHAT : -200, -1);
-        const msgs = (raw || []).map((m) => JSON.parse(m)).filter((m) => m.s > after)
-          .map((m) => ({ ...m, label: unitName(com, m.mid), role: roleOf(com, m.mid), text: m.del ? '' : m.text }));
+        const raw = await redis('LRANGE', K.roomChat(cid, room.id), after ? -KEEP_CHAT : -200, -1);
+        const all = (raw || []).map((m) => JSON.parse(m));
+        const msgs = all.filter((m) => m.s > after).map((m) => ({ ...m, label: unitName(com, m.mid), role: roleOf(com, m.mid), text: m.del ? '' : m.text }));
         // los mensajes borrados después se avisan aparte para quitarlos de la pantalla
-        const dels = (raw || []).map((m) => JSON.parse(m)).filter((m) => m.del && m.s <= after).map((m) => m.s);
-        return res.status(200).json({ msgs, dels, open: com.chatOpen, blocked: !!me.blocked });
+        const dels = all.filter((m) => m.del && m.s <= after).map((m) => m.s);
+        return res.status(200).json({ msgs, dels, open: room.open !== false, blocked: !!me.blocked, name: room.name, members: room.members });
       }
       case 'chat-send': {
+        const room = roomOf(com, body.room);
+        if (!canSee(com, room, mid)) return bad('gone', 404);
         const text = cleanText(body.text, MAX_TEXT);
         if (!text) return bad();
         if (me.blocked) return bad('blocked', 403);
-        if (!com.chatOpen && !admin) return bad('closed', 403);
+        if (room.open === false && !admin) return bad('closed', 403);
         if (await limited(`vec:rl:msg:${cid}:${mid}`, MSGS_PER_MIN, 60)) return bad('too-many', 429);
-        const s = await redis('INCR', K.chatSeq(cid));
+        const s = await redis('INCR', K.roomSeq(cid, room.id));
         const msg = { s, t: Date.now(), mid, text };
-        await pipeline([['RPUSH', K.chat(cid), JSON.stringify(msg)], ['LTRIM', K.chat(cid), -KEEP_CHAT, -1]]);
-        await notify(cid, com, 'all', mid, { title: `Chat · ${com.name}`, body: `${me.label}${role ? ` (${role === 'pres' ? 'Presidente' : 'Vicepresidente'})` : ''}: ${short(text)}`, go: 'chat', tag: 'chat' });
+        await pipeline([['RPUSH', K.roomChat(cid, room.id), JSON.stringify(msg)], ['LTRIM', K.roomChat(cid, room.id), -KEEP_CHAT, -1]]);
+        await notify(cid, com, room.members || 'all', mid, {
+          title: room.id === 'general' ? `Chat · ${com.name}` : `${room.name} · ${com.name}`,
+          body: `${me.label}${role ? ` (${role === 'pres' ? 'Presidente' : 'Vicepresidente'})` : ''}: ${short(text)}`,
+          go: `chat:${room.id}`, tag: `chat-${room.id}`,
+        });
         return ok({ s, t: msg.t });
       }
       case 'chat-del': {
         if (!admin) return needAdmin();
-        const raw = await redis('LRANGE', K.chat(cid), 0, -1);
+        const room = roomOf(com, body.room);
+        if (!room) return bad('gone', 404);
+        const key = K.roomChat(cid, room.id);
+        const raw = await redis('LRANGE', key, 0, -1);
         const i = (raw || []).findIndex((m) => JSON.parse(m).s === Number(body.s));
         if (i < 0) return bad('gone', 404);
         const m = JSON.parse(raw[i]);
         m.del = Date.now();
         m.delBy = mid;
         m.text = '';
-        await redis('LSET', K.chat(cid), i, JSON.stringify(m));
+        await redis('LSET', key, i, JSON.stringify(m));
         return ok();
       }
       case 'chat-open': {
         if (!admin) return needAdmin();
-        com.chatOpen = !!body.open;
+        const room = roomOf(com, body.room);
+        if (!room) return bad('gone', 404);
+        if (room.id === 'general') com.chatOpen = !!body.open;
+        else room.open = !!body.open;
         await saveCom();
-        return ok({ open: com.chatOpen });
+        return ok({ open: !!body.open });
+      }
+      case 'room-create':
+      case 'room-edit': {
+        if (!admin) return needAdmin();
+        const name = cleanText(body.name, 40);
+        const members = [...new Set((Array.isArray(body.members) ? body.members : []).filter((m) => com.units[m]))];
+        if (!name) return bad();
+        com.rooms = com.rooms || [];
+        if (action === 'room-create') {
+          if (com.rooms.length >= MAX_ROOMS) return bad('too-many-rooms', 409);
+          let id;
+          do id = randomId(4); while (com.rooms.some((r) => r.id === id));
+          com.rooms.push({ id, name, members, open: true, t: Date.now() });
+          await saveCom();
+          await notify(cid, com, members, mid, { title: com.name, body: `💬 Te han añadido al chat «${name}»`, go: `chat:${id}`, tag: `chat-${id}` });
+          return ok({ id });
+        }
+        const room = com.rooms.find((r) => r.id === body.room);
+        if (!room) return bad('gone', 404);
+        const added = members.filter((m) => !room.members.includes(m));
+        room.name = name;
+        room.members = members;
+        await saveCom();
+        if (added.length) await notify(cid, com, added, mid, { title: com.name, body: `💬 Te han añadido al chat «${name}»`, go: `chat:${room.id}`, tag: `chat-${room.id}` });
+        return ok({ id: room.id });
+      }
+      case 'room-del': {
+        if (!admin) return needAdmin();
+        const i = (com.rooms || []).findIndex((r) => r.id === body.room);
+        if (i < 0) return bad('gone', 404);
+        const [room] = com.rooms.splice(i, 1);
+        await saveCom();
+        await pipeline([['DEL', K.roomChat(cid, room.id)], ['DEL', K.roomSeq(cid, room.id)]]);
+        return ok();
+      }
+
+      // ----- Llamadas con la presidencia -----
+      case 'ice':
+        return res.status(200).json({ iceServers: await iceServers() });
+      case 'call-send': {
+        const thread = admin && body.mid ? body.mid : mid;
+        if (!com.units[thread]) return bad('gone', 404);
+        const sig = body.sig || {};
+        const k = String(sig.k || '');
+        if (!['ring', 'accept', 'reject', 'busy', 'offer', 'answer', 'end'].includes(k) || !/^[a-f0-9]{16}$/.test(sig.cid || '') || !DEVICE.test(body.device || '')) return bad();
+        if (sig.sdp && (typeof sig.sdp !== 'string' || sig.sdp.length > MAX_SIG)) return bad();
+        if (await limited(`vec:rl:call:${cid}:${thread}`, 80, 60)) return bad('too-many', 429);
+        const fromRole = thread !== mid ? role : ''; // un cargo llamando o contestando a una vivienda
+        const s = await redis('INCR', K.callSeq(cid, thread));
+        const t = Date.now();
+        const m = { s, t, k, cid: sig.cid, to: DEVICE.test(sig.to || '') ? sig.to : '', sdp: sig.sdp || '', video: !!sig.video, dev: body.device, from: mid, fromRole, fromLabel: me.label };
+        const cmds = [
+          ['RPUSH', K.calls(cid, thread), JSON.stringify(m)], ['LTRIM', K.calls(cid, thread), -KEEP_SIGS, -1],
+          ['EXPIRE', K.calls(cid, thread), CALL_TTL_S], ['EXPIRE', K.callSeq(cid, thread), 86400],
+        ];
+        if (k === 'ring') cmds.push(['HSET', K.rings(cid), thread, JSON.stringify({ cid: sig.cid, t, video: !!sig.video, fromRole, dev: body.device })]);
+        if (k === 'accept' || k === 'end' || (k === 'reject' && !fromRole)) cmds.push(['HDEL', K.rings(cid), thread]);
+        await pipeline(cmds);
+        if (k === 'ring') {
+          const what = sig.video ? 'videollamada' : 'llamada';
+          if (fromRole) await notify(cid, com, thread, mid, { title: com.name, body: `📞 La presidencia te está haciendo una ${what}`, go: 'contact', tag: `call-${thread}` });
+          else await notify(cid, com, 'admins', mid, { title: com.name, body: `📞 ${what === 'llamada' ? 'Llamada' : 'Videollamada'} de la vivienda ${me.label}`, go: `thread:${thread}`, tag: `call-${thread}` });
+        }
+        return ok({ s, t });
+      }
+      case 'call-poll': {
+        const thread = admin && body.mid ? body.mid : mid;
+        const after = Math.max(0, Number(body.after) || 0);
+        const raw = (await redis('LRANGE', K.calls(cid, thread), 0, -1)) || [];
+        return res.status(200).json({ signals: raw.map((x) => JSON.parse(x)).filter((x) => x.s > after) });
       }
       case 'block': {
         if (!admin) return needAdmin();
@@ -552,7 +698,7 @@ module.exports = async (req, res) => {
           ['LTRIM', K.dm(cid, who), -KEEP_DM, -1],
           ['HSET', K.dmIndex(cid), who, JSON.stringify({ t: msg.t, from: fromBoard ? 'junta' : 'vecino', text: text.slice(0, 120) })],
         ]);
-        if (fromBoard) await notify(cid, com, who, mid, { title: com.name, body: `✉️ Respuesta de la presidencia: ${short(text)}`, go: 'contact', tag: 'dm' });
+        if (body.quiet) { /* registro de una llamada contestada: sin aviso */ } else if (fromBoard) await notify(cid, com, who, mid, { title: com.name, body: `✉️ Respuesta de la presidencia: ${short(text)}`, go: 'contact', tag: 'dm' });
         else await notify(cid, com, 'admins', mid, { title: com.name, body: `✉️ Vivienda ${me.label}: ${short(text)}`, go: `thread:${mid}`, tag: `dm-${mid}` });
         return ok({ t: msg.t });
       }
@@ -645,6 +791,7 @@ module.exports = async (req, res) => {
         if (!u) return bad('gone', 404);
         if (isAdmin(com, body.mid)) return bad('is-admin', 409);
         delete com.units[body.mid];
+        (com.rooms || []).forEach((r) => { r.members = r.members.filter((m) => m !== body.mid); });
         await dropUnitDevices(cid, body.mid);
         await pipeline([['DEL', K.code(u.h)], ['DEL', K.dm(cid, body.mid)], ['HDEL', K.dmIndex(cid), body.mid]]);
         await saveCom();

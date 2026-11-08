@@ -1,10 +1,11 @@
 # Mi comunidad
 
-App web instalable (PWA) para una comunidad de vecinos. Versión 0.5.1.
+App web instalable (PWA) para una comunidad de vecinos. Versión 0.6.0.
 
 - **Tablón de anuncios**: solo publican el presidente y el vicepresidente; se pueden fijar y borrar.
 - **Contacta con la presidencia**: cada vivienda tiene una conversación privada que solo leen el presidente y el vicepresidente.
-- **Chat de vecinos**: abierto a todas las viviendas. Los cargos lo moderan: cerrar/abrir, borrar mensajes y bloquear viviendas.
+- **Chats de vecinos**: el general (todas las viviendas) y los que creen los cargos con solo algunas viviendas (p. ej. la comisión de obras). Los cargos están en todos y los moderan: cerrar/abrir, borrar mensajes y bloquear viviendas.
+- **Llamadas con la presidencia** (voz y vídeo, WebRTC como en ChatCTRL) desde «Contacta con la presidencia» y, para los cargos, desde cada conversación. Con datos móviles hace falta TURN: variables `CF_TURN_KEY_ID` y `CF_TURN_API_TOKEN` (Cloudflare) en Vercel; `GET /api/comunidad` dice `turn: ok | sin-claves`.
 - **Encuestas**: las crean los cargos con las opciones que quieran y cierre opcional por fecha. Un voto secreto por vivienda. Al cerrarse, el resultado se publica solo en el tablón.
 - **Gestión** (cargos): nombre e **icono de la comunidad** (el icono sale en la app y en todos los PDF), código público de la comunidad, solicitudes de código, alta de viviendas y locales (por plantas con puertas A/B/C/D, Izquierda/Derecha o Izquierda/Centro/Derecha, bajos y locales, o una por línea), cambio de nombre de una vivienda o local (sin cambiar su código), nuevo código, bloqueo y baja de viviendas, y **cambio de presidente y vicepresidente**. El presidente y el vicepresidente tienen exactamente los mismos permisos.
 - **Tarjetas de códigos en PDF** para el buzón (4 por A4): icono y nombre de la comunidad, vivienda, código, aviso de que es personal e intransferible y cómo volver a pedirlo desde la app.

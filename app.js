@@ -1,7 +1,7 @@
 'use strict';
 
 // Versión de la app (se ve en Información). Arreglos y ajustes: 0.x.y; novedades: 0.x.0.
-const APP_VERSION = '0.5.1';
+const APP_VERSION = '0.6.0';
 const APP_NAME = 'Mi comunidad';
 // Uso de la app en Vercel Analytics: cada sección cuenta como una página virtual (nunca datos).
 const track = (path) => { try { window.va?.('pageview', { path }); } catch (_) { /* sin analítica */ } };
@@ -45,6 +45,13 @@ const ICONS = {
   clock: '<circle cx="12" cy="12" r="8"/><path d="M12 7.5V12l3 2"/>',
   clip: '<path d="M19 11.5l-7.4 7.4a4.6 4.6 0 0 1-6.5-6.5l7.8-7.8a3.1 3.1 0 0 1 4.4 4.4l-7.6 7.6a1.5 1.5 0 0 1-2.2-2.2l7-7"/>',
   download: '<path d="M12 4v11M7.5 10.5L12 15l4.5-4.5"/><path d="M4 17v1.5A1.5 1.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5V17"/>',
+  phone: '<path d="M6.5 3.5h3l1.5 4.5-2 1.5a12 12 0 0 0 5.5 5.5l1.5-2 4.5 1.5v3a2 2 0 0 1-2.2 2A16.5 16.5 0 0 1 4.5 5.7a2 2 0 0 1 2-2.2z"/>',
+  video: '<rect x="3" y="6" width="13" height="12" rx="2.5"/><path d="M16 10.5l5-3v9l-5-3"/>',
+  videoOff: '<path d="M8 6h5.5A2.5 2.5 0 0 1 16 8.5V13M16 16a2.5 2.5 0 0 1-2.5 2H5.5A2.5 2.5 0 0 1 3 15.5V8.5C3 7.5 3.5 6.7 4.3 6.3"/><path d="M16 10.5l5-3v9l-2.5-1.5"/><path d="M3 3l18 18"/>',
+  flip: '<path d="M4 8.5A2 2 0 0 1 6 6.5h2l1.5-2h5l1.5 2h2a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/><path d="M8.5 13a3.5 3.5 0 0 1 6-2.4l1 1M15.5 13a3.5 3.5 0 0 1-6 2.4l-1-1"/><path d="M15.5 9.5v2h-2M8.5 16.5v-2h2"/>',
+  hangup: '<path d="M3 14.5c0-1 .3-1.8 1-2.4 4.5-3.8 11.5-3.8 16 0 .7.6 1 1.4 1 2.4v1.7a1.3 1.3 0 0 1-1.7 1.2l-3-1a1.3 1.3 0 0 1-.9-1.2v-1.9a11 11 0 0 0-6.8 0v1.9c0 .6-.4 1.1-.9 1.2l-3 1A1.3 1.3 0 0 1 3 16.2z"/>',
+  mic: '<rect x="9" y="3.5" width="6" height="11" rx="3"/><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v2.5"/>',
+  micOff: '<path d="M9 9v2.5a3 3 0 0 0 5 2.2M15 10.5V6.5a3 3 0 0 0-5.6-1.5"/><path d="M5.5 11.5a6.5 6.5 0 0 0 10.6 5M18.5 11.5c0 .7-.1 1.4-.3 2M12 18v2.5"/><path d="M4 4l16 16"/>',
   zoom: '<circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5l5 5M8 10.5h5M10.5 8v5"/>',
   image: '<rect x="3.5" y="4.5" width="17" height="15" rx="2"/><circle cx="9" cy="10" r="1.8"/><path d="M4 17l5-4.5 4 3.5 2.5-2 4.5 4"/>',
   bell: '<path d="M6 16.5V11a6 6 0 0 1 12 0v5.5l1.5 2h-15z"/><path d="M10 20.5a2 2 0 0 0 4 0"/>',
@@ -178,6 +185,7 @@ function errorText(e) {
     past: 'La fecha de cierre debe ser futura.',
     gone: 'Ya no existe.',
     'not-configured': 'El servidor aún no tiene base de datos configurada.',
+    'too-many-rooms': 'Se ha llegado al máximo de chats.',
     'label-taken': 'Ya hay una vivienda o local con ese nombre.',
     'file-missing': 'Un archivo no terminó de subirse. Inténtalo de nuevo.',
   };
@@ -186,9 +194,10 @@ function errorText(e) {
 
 // ---------- Sesión (código de la vivienda en este dispositivo) ----------
 
-const emptySeen = () => ({ board: 0, chat: 0, dm: 0, threads: {} });
+const emptySeen = () => ({ board: 0, rooms: {}, dm: 0, threads: {} });
 let sess = { code: '', seen: emptySeen(), cache: null, ...load(SESSION_KEY, {}) };
 sess.seen = { ...emptySeen(), ...(sess.seen || {}) };
+if (sess.seen.chat && !sess.seen.rooms.general) sess.seen.rooms.general = sess.seen.chat; // antes había un solo chat
 let st = sess.cache; // último estado recibido (se muestra al momento, aunque no haya conexión)
 let offline = false;
 const persist = () => save(SESSION_KEY, sess);
@@ -248,7 +257,9 @@ function renderHome() {
   const newPosts = st.board.filter((p) => p.t > sess.seen.board && p.by !== me.mid).length;
   const openPolls = st.polls.filter((p) => !p.closed);
   const pendingVotes = openPolls.filter((p) => p.mine === null).length;
-  const chatNew = st.chat.s > sess.seen.chat && !st.chat.mine;
+  const rooms = st.rooms || [];
+  const chatNew = rooms.filter(roomUnread).length;
+  const general = rooms.find((r) => r.id === 'general');
   const dmNew = !admin && st.dm && st.dm.from === 'junta' && st.dm.t > sess.seen.dm;
   const threadsNew = admin ? (st.threads || []).filter((t) => t.from === 'vecino' && t.t > (sess.seen.threads[t.mid] || 0)).length : 0;
   const reqs = admin ? (st.requests || []).length : 0;
@@ -285,7 +296,7 @@ function renderHome() {
       </button>`}
       <button class="tile ${chatNew ? 'hot' : ''}" type="button" data-go="chat">
         <span class="tile-ico">${icon('chat', 24)}</span>
-        <span class="tile-text"><b>Chat de vecinos</b><small>${!st.community.chatOpen ? 'Cerrado por la administración' : me.blocked ? 'Estás bloqueado en el chat' : chatNew ? 'Mensajes nuevos' : 'Habla con todos los vecinos'}</small></span>
+        <span class="tile-text"><b>${rooms.length > 1 ? 'Chats de vecinos' : 'Chat de vecinos'}</b><small>${me.blocked ? 'Estás bloqueado en los chats' : chatNew ? (rooms.length > 1 ? plural(chatNew, 'chat con mensajes nuevos', 'chats con mensajes nuevos') : 'Mensajes nuevos') : rooms.length > 1 ? plural(rooms.length, 'chat', 'chats') : general && !general.open ? 'Cerrado por la administración' : 'Habla con todos los vecinos'}</small></span>
         ${badge(chatNew)}
       </button>
       <button class="tile ${pendingVotes ? 'hot' : ''}" type="button" data-go="polls">
@@ -314,7 +325,7 @@ function renderHome() {
 $('home').addEventListener('click', (e) => {
   if (e.target.closest('[data-push]')) return enablePush();
   const go = e.target.closest('[data-go]');
-  if (go) openView(go.dataset.go);
+  if (go) { if (go.dataset.go === 'chat') openChats(); else openView(go.dataset.go); }
 });
 
 // ---------- Bienvenida: sin código en este dispositivo ----------
@@ -507,7 +518,8 @@ async function refresh() {
     }
     if (!sess.code) return;
     renderHome();
-    if (view && ['board', 'polls', 'threads', 'admin'].includes(view.name)) renderView();
+    if (view && ['board', 'polls', 'threads', 'admin', 'rooms'].includes(view.name)) renderView();
+    checkRings();
     if (st && linkGo) { const g = linkGo; linkGo = ''; goTo(g); }
     if (st && !offline) setTimeout(maybeAskPush, 900);
   })();
@@ -528,7 +540,7 @@ document.addEventListener('visibilitychange', () => {
 // ---------- Secciones a pantalla completa ----------
 
 let view = null; // { name, arg, tick?, timer? }
-const VIEW_TITLES = { board: 'Tablón de anuncios', contact: 'Contacta con la presidencia', threads: 'Mensajes de vecinos', thread: '', chat: 'Chat de vecinos', polls: 'Encuestas', admin: 'Gestión de la comunidad' };
+const VIEW_TITLES = { board: 'Tablón de anuncios', contact: 'Contacta con la presidencia', threads: 'Mensajes de vecinos', thread: '', rooms: 'Chats de vecinos', chat: 'Chat de vecinos', polls: 'Encuestas', admin: 'Gestión de la comunidad' };
 
 function openView(name, arg) {
   if (!st) return;
@@ -544,7 +556,7 @@ function openView(name, arg) {
   $('view-body').innerHTML = '';
   $('composer').hidden = true;
   $('composer-note').hidden = true;
-  if (name === 'chat') startChat();
+  if (name === 'chat') startChat(arg || 'general');
   else if (name === 'contact' || name === 'thread') startDM(name === 'thread' ? arg : null);
   else renderView();
   $('view-body').scrollTop = 0;
@@ -559,6 +571,7 @@ function closeView(quiet) {
 }
 $('view-back').addEventListener('click', () => {
   if (view?.name === 'thread') return openView('threads');
+  if (view?.name === 'chat' && (roomsOf().length > 1 || isAdmin())) return openView('rooms');
   closeView();
 });
 
@@ -568,6 +581,7 @@ function renderView() {
   const top = body.scrollTop;
   if (view.name === 'board') renderBoard(body);
   else if (view.name === 'polls') renderPolls(body);
+  else if (view.name === 'rooms') renderRooms(body);
   else if (view.name === 'threads') renderThreads(body);
   else if (view.name === 'admin') renderAdmin(body);
   body.scrollTop = top;
@@ -734,17 +748,49 @@ function messagesHTML(list, intro = '') {
   return html;
 }
 
-// Chat de vecinos
+// Chats de vecinos: el general (todas las viviendas) y los que crean los cargos con algunas
+// viviendas (p. ej. la comisión de obras). El presidente y el vicepresidente están en todos y los moderan.
+const roomsOf = () => st?.rooms || [];
+const roomById = (id) => roomsOf().find((r) => r.id === id);
+const roomUnread = (r) => r.last.s > (sess.seen.rooms[r.id] || 0) && !r.last.mine;
+const membersLabel = (r) => (r.members ? `${plural(r.members.length, 'vivienda', 'viviendas')} y la presidencia` : 'Todas las viviendas');
+function openChats() {
+  if (roomsOf().length <= 1 && !isAdmin()) openView('chat', 'general');
+  else openView('rooms');
+}
+function renderRooms(body) {
+  const admin = isAdmin();
+  $('view-sub').textContent = st.community.name;
+  body.innerHTML = `
+    ${admin ? `<div class="add-row"><button class="done-btn" type="button" data-new-room>${icon('plus', 18, 1.8)} Nuevo chat</button></div>
+    <p class="note banner">${icon('users', 16)} <span>Crea chats con solo algunas viviendas, por ejemplo la comisión de obras. El presidente y el vicepresidente estáis en todos y los moderáis.</span></p>` : ''}
+    <div class="rows">${roomsOf().map((r) => `
+      <button class="row ${roomUnread(r) ? 'unread' : ''}" type="button" data-room="${r.id}">
+        <span class="tile-ico">${icon(r.open ? (r.members ? 'users' : 'chat') : 'lock', 20)}</span>
+        <span class="row-main">
+          <span class="row-top"><b>${esc(r.name)}</b>${r.last.t ? `<small>${shortWhen(r.last.t)}</small>` : ''}</span>
+          <span class="row-sub">${r.open ? membersLabel(r) : 'Cerrado por la administración'}</span>
+        </span>
+        ${roomUnread(r) ? '<span class="badge">•</span>' : ''}
+      </button>`).join('')}</div>`;
+  body.querySelectorAll('[data-room]').forEach((b) => b.addEventListener('click', () => openView('chat', b.dataset.room)));
+  body.querySelector('[data-new-room]')?.addEventListener('click', () => openRoomEditor(null));
+}
+
 let chatMsgs = [];
 let chatAfter = 0;
-function startChat() {
+let curRoom = null; // { id, name, members, open }
+function startChat(id) {
   chatMsgs = [];
   chatAfter = 0;
-  $('view-sub').textContent = st.community.name;
+  const r = roomById(id) || roomById('general');
+  curRoom = { ...(r || { id: 'general', name: 'Todos los vecinos', members: null, open: true }) };
+  $('view-title').textContent = curRoom.id === 'general' ? 'Chat de vecinos' : curRoom.name;
+  $('view-sub').textContent = curRoom.id === 'general' ? st.community.name : membersLabel(curRoom);
   view.tick = pollChat;
   view.timer = setInterval(() => { if (document.visibilityState === 'visible') pollChat(); }, CHAT_EVERY_MS);
   composerState.send = async (text) => {
-    await call('chat-send', { text });
+    await call('chat-send', { room: curRoom.id, text });
     await pollChat(true);
   };
   renderChat(true);
@@ -752,9 +798,13 @@ function startChat() {
 }
 async function pollChat(scroll) {
   if (view?.name !== 'chat') return;
+  const room = curRoom.id;
   let r;
-  try { r = await call('chat-poll', { after: chatAfter }); } catch (_) { return; }
-  if (view?.name !== 'chat') return;
+  try { r = await call('chat-poll', { room, after: chatAfter }); } catch (e) {
+    if (e.code === 'gone' && view?.name === 'chat') { toast('Ya no estás en este chat'); openChats(); }
+    return;
+  }
+  if (view?.name !== 'chat' || curRoom.id !== room) return;
   const fresh = r.msgs.filter((m) => !chatMsgs.some((x) => x.s === m.s));
   const delSet = new Set(r.dels);
   let changed = fresh.length > 0;
@@ -762,45 +812,93 @@ async function pollChat(scroll) {
   chatMsgs.push(...fresh);
   chatMsgs = chatMsgs.slice(-500);
   if (chatMsgs.length) chatAfter = chatMsgs[chatMsgs.length - 1].s;
-  const was = { open: st.community.chatOpen, blocked: st.me.blocked };
-  st.community.chatOpen = r.open;
+  const was = { open: curRoom.open, blocked: st.me.blocked };
+  curRoom.open = r.open;
+  curRoom.name = r.name || curRoom.name;
   st.me.blocked = r.blocked;
   if (changed || was.open !== r.open || was.blocked !== r.blocked || scroll) renderChat(scroll);
-  if (chatAfter > sess.seen.chat) { sess.seen.chat = chatAfter; persist(); }
+  if (chatAfter > (sess.seen.rooms[room] || 0)) { sess.seen.rooms[room] = chatAfter; persist(); }
 }
 function renderChat(scroll) {
   const body = $('view-body');
   const stick = scroll || nearBottom(body);
   const admin = isAdmin();
   const me = st.me;
-  const intro = `<p class="note banner">${icon('users', 16)} <span>Chat abierto a todas las viviendas. ${admin ? 'Toca un mensaje para borrarlo o bloquear a esa vivienda.' : 'La presidencia modera el chat.'}</span></p>`;
-  body.innerHTML = chatMsgs.length || !st.community.chatOpen
+  const general = curRoom.id === 'general';
+  const intro = `<p class="note banner">${icon('users', 16)} <span>${general ? 'Chat abierto a todas las viviendas.' : `Chat de ${membersLabel(curRoom).toLowerCase()}: solo lo veis quienes estáis en él.`} ${admin ? 'Toca un mensaje para borrarlo o bloquear a esa vivienda.' : 'La presidencia modera el chat.'}</span></p>`;
+  body.innerHTML = chatMsgs.length || !curRoom.open
     ? messagesHTML(chatMsgs.map((m) => ({
       key: m.s, t: m.t, mine: m.mid === me.mid, who: m.mid === me.mid ? '' : m.label, role: m.role, text: m.text, deleted: !!m.del, board: !!m.role,
-    })), intro) + (!st.community.chatOpen ? `<p class="sys">${icon('lock', 13)} La administración ha cerrado el chat</p>` : '')
-    : `${intro}<div class="empty"><span class="tile-ico">${icon('chat', 28)}</span><h3>Aún no hay mensajes</h3><p>Saluda a tus vecinos.</p></div>`;
+    })), intro) + (!curRoom.open ? `<p class="sys">${icon('lock', 13)} La administración ha cerrado el chat</p>` : '')
+    : `${intro}<div class="empty"><span class="tile-ico">${icon('chat', 28)}</span><h3>Aún no hay mensajes</h3><p>${general ? 'Saluda a tus vecinos.' : 'Escribe el primer mensaje.'}</p></div>`;
   if (stick) body.scrollTop = body.scrollHeight;
   $('view-actions').innerHTML = admin
-    ? `<button class="icon-btn sm" type="button" id="chat-lock" aria-label="${st.community.chatOpen ? 'Cerrar el chat' : 'Abrir el chat'}" title="${st.community.chatOpen ? 'Cerrar el chat' : 'Abrir el chat'}">${icon(st.community.chatOpen ? 'unlock' : 'lock', 18)}</button>`
+    ? `${general ? '' : `<button class="icon-btn sm" type="button" id="chat-edit" aria-label="Editar el chat" title="Editar el chat">${icon('gear', 18)}</button>`}
+       <button class="icon-btn sm" type="button" id="chat-lock" aria-label="${curRoom.open ? 'Cerrar el chat' : 'Abrir el chat'}" title="${curRoom.open ? 'Cerrar el chat' : 'Abrir el chat'}">${icon(curRoom.open ? 'unlock' : 'lock', 18)}</button>`
     : '';
   $('chat-lock')?.addEventListener('click', toggleChatOpen);
-  if (me.blocked) showComposer(false, 'La administración te ha bloqueado en el chat. Puedes leerlo, pero no escribir.');
-  else if (!st.community.chatOpen && !admin) showComposer(false, 'El chat está cerrado por la administración.');
-  else showComposer(true, '', st.community.chatOpen ? 'Escribe a todos los vecinos' : 'Chat cerrado: solo escribe la administración');
+  $('chat-edit')?.addEventListener('click', () => openRoomEditor(roomById(curRoom.id) || curRoom));
+  const to = general ? 'Escribe a todos los vecinos' : `Escribe en «${curRoom.name}»`;
+  if (me.blocked) showComposer(false, 'La administración te ha bloqueado en los chats. Puedes leerlos, pero no escribir.');
+  else if (!curRoom.open && !admin) showComposer(false, 'El chat está cerrado por la administración.');
+  else showComposer(true, '', curRoom.open ? to : 'Chat cerrado: solo escribe la administración');
 }
 function toggleChatOpen() {
-  const open = !st.community.chatOpen;
+  const open = !curRoom.open;
   confirmSheet({
     title: open ? '¿Abrir el chat?' : '¿Cerrar el chat?',
-    text: open ? 'Todos los vecinos podrán volver a escribir.' : 'Los vecinos podrán leer los mensajes, pero no escribir. Tú y el otro cargo sí podréis.',
+    text: open ? 'Sus miembros podrán volver a escribir.' : 'Se podrán leer los mensajes, pero no escribir. El presidente y el vicepresidente sí podréis.',
     ok: open ? 'Abrir' : 'Cerrar el chat',
     run: async () => {
-      await call('chat-open', { open });
-      st.community.chatOpen = open;
+      await call('chat-open', { room: curRoom.id, open });
+      curRoom.open = open;
+      const r = roomById(curRoom.id);
+      if (r) r.open = open;
       renderChat();
       toast(open ? 'Chat abierto' : 'Chat cerrado');
     },
   });
+}
+// Crear o editar un chat con algunas viviendas
+function openRoomEditor(room) {
+  const units = (st.units || []).filter((u) => !u.role);
+  const chosen = new Set(room?.members || []);
+  const sheet = openSheet(room ? 'Editar el chat' : 'Nuevo chat');
+  const draw = () => {
+    const name = sheet.querySelector('#rm-name')?.value ?? room?.name ?? '';
+    sheet.innerHTML = `
+      <div class="sheet-head"><h2 class="sheet-title">${room ? 'Editar el chat' : 'Nuevo chat'}</h2>
+        <button class="icon-btn sm" type="button" data-close aria-label="Cerrar">${icon('close', 18)}</button></div>
+      <input class="title-input" id="rm-name" maxlength="40" placeholder="Nombre, p. ej. Comisión de obras" value="${esc(name)}" autocomplete="off" />
+      <p class="opt-label">Viviendas en el chat (${chosen.size})</p>
+      <p class="small muted">El presidente y el vicepresidente están siempre.</p>
+      <div class="row-btns"><button class="ghost-btn sm-btn" type="button" data-all>Todas</button><button class="ghost-btn sm-btn" type="button" data-none>Ninguna</button></div>
+      <div class="pick-list">${units.map((u) => `<label class="check-row pick"><input type="checkbox" data-mid="${u.mid}" ${chosen.has(u.mid) ? 'checked' : ''} /> <span>${esc(u.label)}</span></label>`).join('') || '<p class="small muted">Aún no hay viviendas dadas de alta.</p>'}</div>
+      <p class="form-error" id="rm-err" role="alert"></p>
+      <div class="editor-actions">${room ? `<button class="ghost-btn danger" type="button" data-del>${icon('trash', 16)} Eliminar</button>` : '<span></span>'}<button class="done-btn" type="button" data-save>${room ? 'Guardar' : 'Crear chat'}</button></div>`;
+    sheet.querySelector('[data-close]').addEventListener('click', closeSheet);
+    sheet.querySelectorAll('[data-mid]').forEach((c) => c.addEventListener('change', () => { if (c.checked) chosen.add(c.dataset.mid); else chosen.delete(c.dataset.mid); sheet.querySelector('.opt-label').textContent = `Viviendas en el chat (${chosen.size})`; }));
+    sheet.querySelector('[data-all]').addEventListener('click', () => { units.forEach((u) => chosen.add(u.mid)); draw(); });
+    sheet.querySelector('[data-none]').addEventListener('click', () => { chosen.clear(); draw(); });
+    sheet.querySelector('[data-save]').addEventListener('click', async () => {
+      const n = sheet.querySelector('#rm-name').value.trim();
+      const err = sheet.querySelector('#rm-err');
+      if (!n) { err.textContent = 'Ponle un nombre al chat.'; return; }
+      if (!chosen.size) { err.textContent = 'Elige al menos una vivienda.'; return; }
+      try {
+        const r = await call(room ? 'room-edit' : 'room-create', { room: room?.id, name: n, members: [...chosen] });
+        closeSheet();
+        await refresh();
+        toast(room ? 'Chat guardado' : 'Chat creado');
+        openView('chat', r.id);
+      } catch (e) { err.textContent = errorText(e); }
+    });
+    sheet.querySelector('[data-del]')?.addEventListener('click', () => confirmSheet({
+      title: `¿Eliminar «${room.name}»?`, text: 'Se borrarán el chat y todos sus mensajes para todos sus miembros.', ok: 'Eliminar', danger: true,
+      run: async () => { await call('room-del', { room: room.id }); await refresh(); openView('rooms'); toast('Chat eliminado'); },
+    }));
+  };
+  draw();
 }
 $('view-body').addEventListener('click', (e) => {
   if (view?.name !== 'chat' || !isAdmin()) return;
@@ -821,22 +919,308 @@ function openChatMsgActions(m) {
     ${m.del ? '<p class="small muted">Este mensaje ya está eliminado.</p>' : `<p class="small muted" style="white-space:pre-wrap">«${esc(m.text.slice(0, 200))}${m.text.length > 200 ? '…' : ''}»</p>`}
     <div class="stack">
       ${m.del ? '' : `<button class="ghost-btn danger" type="button" data-del>${icon('trash', 18)} Borrar el mensaje</button>`}
-      ${canBlock ? `<button class="ghost-btn ${unit.blocked ? '' : 'danger'}" type="button" data-block>${icon('ban', 18)} ${unit.blocked ? 'Desbloquear' : 'Bloquear'} a la vivienda ${esc(m.label)} en el chat</button>` : ''}
+      ${canBlock ? `<button class="ghost-btn ${unit.blocked ? '' : 'danger'}" type="button" data-block>${icon('ban', 18)} ${unit.blocked ? 'Desbloquear' : 'Bloquear'} a la vivienda ${esc(m.label)} en los chats</button>` : ''}
     </div>`;
   sheet.querySelector('[data-close]').addEventListener('click', closeSheet);
   sheet.querySelector('[data-del]')?.addEventListener('click', async () => {
-    try { await call('chat-del', { s: m.s }); m.del = 1; closeSheet(); renderChat(); toast('Mensaje borrado'); } catch (e) { toast(errorText(e)); }
+    try { await call('chat-del', { room: curRoom.id, s: m.s }); m.del = 1; closeSheet(); renderChat(); toast('Mensaje borrado'); } catch (e) { toast(errorText(e)); }
   });
   sheet.querySelector('[data-block]')?.addEventListener('click', async () => {
     try {
       await call('block', { mid: m.mid, blocked: !unit.blocked });
       unit.blocked = !unit.blocked;
       closeSheet();
-      toast(unit.blocked ? `Vivienda ${m.label} bloqueada en el chat` : `Vivienda ${m.label} desbloqueada`);
+      toast(unit.blocked ? `Vivienda ${m.label} bloqueada en los chats` : `Vivienda ${m.label} desbloqueada`);
       refresh();
     } catch (e) { toast(errorText(e)); }
   });
 }
+
+// ----- Llamadas con la presidencia (como en ChatCTRL) -----
+// La voz y el vídeo van directos entre los móviles (WebRTC, siempre cifrado). Para conectarlos se pasan
+// por el servidor unas señales: ring → accept → offer → answer (una sola señal por lado: se esperan las
+// rutas de red antes de mandarla). Un vecino llama a la presidencia (suena al presidente y al
+// vicepresidente) y la presidencia llama a una vivienda (suena en todos sus móviles); habla quien conteste.
+const CALL_POLL_MS = 800;
+const CALL_CONNECT_MS = 20e3;
+const ICE_WAIT_MS = 4000;
+const CALL_RING_MS = 45e3;
+const DEV_KEY = 'micomunidad:dev';
+const myDev = load(DEV_KEY, '') || (() => {
+  const d = [...crypto.getRandomValues(new Uint8Array(16))].map((b) => b.toString(16).padStart(2, '0')).join('');
+  save(DEV_KEY, d);
+  return d;
+})();
+let callNow = null; // { thread, cid, dir, state, peer, name, video, pc, dc, stream, seen, … }
+const deadCalls = new Set();
+const canCall = () => !!(window.RTCPeerConnection && navigator.mediaDevices?.getUserMedia);
+const CAMERA = { width: { ideal: 960 }, height: { ideal: 540 }, frameRate: { ideal: 24 } };
+const getMedia = (video) => navigator.mediaDevices.getUserMedia({
+  audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+  video: video ? { ...CAMERA, facingMode: 'user' } : false,
+});
+const fmtDur = (sec) => { const s = Math.max(0, Math.round(sec)); return `${Math.floor(s / 60)}:${pad(s % 60)}`; };
+const callSig = (c, fields) => call('call-send', { mid: isAdmin() ? c.thread : undefined, device: myDev, sig: { cid: c.cid, ...fields } });
+
+function onSignal(c, m) {
+  if (m.dev === myDev || callNow !== c || m.cid !== c.cid) return;
+  if (m.k === 'end') finishCall(c.state === 'live' ? 'Llamada finalizada' : 'La llamada ha terminado');
+  else if (m.k === 'accept') {
+    if (c.dir === 'out' && c.state === 'calling') { c.peer = m.dev; connecting(c); makeOffer(c).catch(() => finishCall('No se ha podido conectar')); }
+    else if (c.dir === 'in' && c.state === 'incoming') { c.quiet = true; finishCall(''); } // ha contestado otro móvil de este lado
+  } else if ((m.k === 'reject' || m.k === 'busy') && c.dir === 'out' && c.state === 'calling') {
+    sayEnd(c);
+    finishCall(m.k === 'busy' ? 'Está en otra llamada' : 'No puede contestar ahora');
+  } else if (m.k === 'offer') {
+    if (m.to !== myDev) { c.quiet = true; finishCall(''); return; }
+    makeAnswer(c, m.sdp).catch(() => finishCall('No se ha podido conectar'));
+  } else if (m.k === 'answer' && m.to === myDev && c.pc) {
+    c.pc.setRemoteDescription({ type: 'answer', sdp: m.sdp }).catch(() => finishCall('No se ha podido conectar'));
+  }
+}
+async function pollCall(c) {
+  if (callNow !== c || c.state === 'live') return;
+  try {
+    const { signals } = await call('call-poll', { mid: isAdmin() ? c.thread : undefined, after: c.seen || 0 });
+    for (const m of signals || []) { c.seen = Math.max(c.seen || 0, m.s); onSignal(c, m); }
+  } catch (_) { /* se reintenta */ }
+  if (callNow === c && c.state !== 'live') setTimeout(() => pollCall(c), CALL_POLL_MS);
+}
+function connecting(c) {
+  clearTimeout(c.timer);
+  stopTone();
+  c.state = 'connecting';
+  c.timer = setTimeout(() => { if (callNow === c && c.state === 'connecting') { sayEnd(c); finishCall('No se ha podido conectar'); } }, CALL_CONNECT_MS);
+  paintCall();
+}
+// Llamar: un vecino a la presidencia o la presidencia a la vivienda de la conversación abierta
+async function startCall(video = false) {
+  if (callNow || !st) return;
+  if (!canCall()) { toast('Este navegador no permite llamadas'); return; }
+  const admin = isAdmin();
+  const thread = admin ? view?.arg : st.me.mid;
+  if (!thread) return;
+  const u = (st.units || []).find((x) => x.mid === thread);
+  track(video ? '/videollamada' : '/llamada');
+  const c = (callNow = { thread, cid: randomHex(8), dir: 'out', state: 'calling', name: admin ? `Vivienda ${u ? u.label : ''}` : 'Presidencia', label: admin && u ? u.label : '', video, facing: 'user' });
+  unlockTone(); // dentro del toque, o el iPhone deja el sonido en silencio
+  paintCall();
+  try { c.stream = await getMedia(video); } catch (_) {
+    finishCall(video ? 'Hace falta permiso para usar la cámara y el micrófono' : 'Hace falta permiso para usar el micrófono');
+    return;
+  }
+  if (callNow !== c) return dropMic(c);
+  paintCall();
+  try {
+    const { s } = await callSig(c, { k: 'ring', video });
+    c.seen = s;
+  } catch (_) { finishCall('Sin conexión'); return; }
+  if (callNow !== c) return;
+  playTone('back');
+  c.timer = setTimeout(() => { if (callNow === c) { sayEnd(c); finishCall('No contesta'); } }, CALL_RING_MS);
+  pollCall(c);
+}
+// Llamadas que suenan para este móvil (las trae el estado; los avisos push lo actualizan al momento)
+function checkRings() {
+  if (callNow || !st?.rings?.length) return;
+  const r = st.rings.find((x) => !deadCalls.has(x.cid) && x.dev !== myDev);
+  if (!r) return;
+  const admin = isAdmin();
+  const c = (callNow = { thread: r.thread, cid: r.cid, dir: 'in', state: 'incoming', peer: r.dev, name: admin ? `Vivienda ${r.label}` : 'Presidencia', label: admin ? r.label : '', video: !!r.video, facing: 'user', seen: 0 });
+  playTone('ring');
+  c.timer = setTimeout(() => { if (callNow === c) finishCall(''); }, CALL_RING_MS);
+  paintCall();
+  pollCall(c);
+}
+async function acceptCall() {
+  const c = callNow;
+  if (!c || c.state !== 'incoming') return;
+  unlockTone();
+  connecting(c);
+  try {
+    // Sin cámara o sin permiso para usarla se contesta solo con voz, viendo al otro
+    c.stream = await getMedia(c.video).catch(() => (c.video ? getMedia(false) : Promise.reject(new Error('mic'))));
+    if (callNow !== c) return dropMic(c);
+    paintCall();
+    await callSig(c, { k: 'accept' });
+  } catch (err) {
+    callSig(c, { k: 'reject', to: c.peer }).catch(() => {});
+    finishCall(err.status ? 'Sin conexión' : 'Hace falta permiso para usar el micrófono');
+  }
+}
+async function makePeer(c) {
+  const { iceServers } = await call('ice').catch(() => ({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] }));
+  const pc = (c.pc = new RTCPeerConnection({ iceServers }));
+  c.stream.getTracks().forEach((t) => pc.addTrack(t, c.stream));
+  pc.ontrack = (e) => {
+    const el = $(c.video ? 'call-remote' : 'call-audio');
+    el.srcObject = e.streams[0];
+    el.play().catch(() => {});
+  };
+  pc.onconnectionstatechange = () => {
+    if (callNow !== c) return;
+    if (pc.connectionState === 'connected' && c.state !== 'live') goLive(c);
+    if (pc.connectionState === 'failed') { sayEnd(c); finishCall(c.state === 'live' ? 'Se ha cortado la llamada' : 'No se ha podido conectar'); }
+  };
+  return pc;
+}
+function watchChannel(c, dc) {
+  c.dc = dc;
+  dc.onmessage = (e) => { if (callNow === c && e.data === 'end') finishCall('Llamada finalizada'); };
+}
+const iceReady = (pc) => new Promise((resolve) => {
+  if (pc.iceGatheringState === 'complete') return resolve();
+  setTimeout(resolve, ICE_WAIT_MS);
+  pc.addEventListener('icegatheringstatechange', () => { if (pc.iceGatheringState === 'complete') resolve(); });
+});
+async function makeOffer(c) {
+  const pc = await makePeer(c);
+  watchChannel(c, pc.createDataChannel('ctrl'));
+  await pc.setLocalDescription(await pc.createOffer());
+  await iceReady(pc);
+  if (callNow === c) await callSig(c, { k: 'offer', to: c.peer, sdp: pc.localDescription.sdp });
+}
+async function makeAnswer(c, sdp) {
+  const pc = await makePeer(c);
+  pc.ondatachannel = (e) => watchChannel(c, e.channel);
+  await pc.setRemoteDescription({ type: 'offer', sdp });
+  await pc.setLocalDescription(await pc.createAnswer());
+  await iceReady(pc);
+  if (callNow === c) await callSig(c, { k: 'answer', to: c.peer, sdp: pc.localDescription.sdp });
+}
+function goLive(c) {
+  clearTimeout(c.timer);
+  stopTone();
+  c.state = 'live';
+  c.startedAt = Date.now();
+  c.tick = setInterval(paintCall, 1000);
+  navigator.wakeLock?.request('screen').then((l) => { c.wake = l; }).catch(() => {});
+  paintCall();
+}
+function sayEnd(c) {
+  try { if (c.dc?.readyState === 'open') c.dc.send('end'); } catch (_) { /* ya cerrado */ }
+  callSig(c, { k: 'end', to: c.peer }).catch(() => {});
+}
+function hangUp() {
+  const c = callNow;
+  if (!c) return;
+  deadCalls.add(c.cid);
+  if (c.state === 'incoming') { callSig(c, { k: 'reject', to: c.peer }).catch(() => {}); finishCall(''); return; }
+  sayEnd(c);
+  finishCall('Llamada finalizada');
+}
+const dropMic = (c) => c.stream?.getTracks().forEach((t) => t.stop());
+function finishCall(note) {
+  const c = callNow;
+  if (!c) return;
+  callNow = null;
+  deadCalls.add(c.cid);
+  clearTimeout(c.timer);
+  clearInterval(c.tick);
+  stopTone();
+  dropMic(c);
+  c.wake?.release().catch(() => {});
+  try { c.pc?.close(); } catch (_) { /* ya cerrada */ }
+  ['call-audio', 'call-remote', 'call-self'].forEach((id) => { $(id).srcObject = null; });
+  $('call').hidden = true;
+  if (note) toast(note);
+  // Quien llama deja constancia en la conversación: duración, o llamada perdida si nadie contestó
+  if (c.dir === 'out' && !c.quiet && c.stream && (c.startedAt || c.state === 'calling')) {
+    const what = c.video ? 'Videollamada' : 'Llamada';
+    const text = c.startedAt ? `📞 ${what} (${fmtDur((Date.now() - c.startedAt) / 1000)})` : `📞 ${what} perdida`;
+    call('dm-send', { mid: isAdmin() ? c.thread : undefined, text, quiet: !!c.startedAt }).then(() => { if (view?.name === 'contact' || view?.name === 'thread') pollDM(true); }).catch(() => {});
+  }
+}
+function toggleCallMute() {
+  if (!callNow?.stream) return;
+  callNow.mutedMic = !callNow.mutedMic;
+  callNow.stream.getAudioTracks().forEach((t) => { t.enabled = !callNow.mutedMic; });
+  paintCall();
+}
+function toggleCamera() {
+  if (!callNow?.stream) return;
+  callNow.camOff = !callNow.camOff;
+  callNow.stream.getVideoTracks().forEach((t) => { t.enabled = !callNow.camOff; });
+  paintCall();
+}
+async function flipCamera() {
+  const c = callNow;
+  const old = c?.stream?.getVideoTracks()[0];
+  if (!old) return;
+  const facing = c.facing === 'user' ? 'environment' : 'user';
+  old.stop(); // el iPhone no deja usar dos cámaras a la vez
+  try {
+    const fresh = await navigator.mediaDevices.getUserMedia({ video: { ...CAMERA, facingMode: facing } });
+    const track = fresh.getVideoTracks()[0];
+    if (callNow !== c) return track.stop();
+    await c.pc?.getSenders().find((x) => x.track?.kind === 'video')?.replaceTrack(track);
+    c.stream.removeTrack(old);
+    c.stream.addTrack(track);
+    track.enabled = !c.camOff;
+    c.facing = facing;
+    $('call-self').srcObject = c.stream;
+    paintCall();
+  } catch (_) { toast('No se ha podido cambiar de cámara'); }
+}
+function paintCall() {
+  const c = callNow;
+  if (!c) return;
+  const hasCam = !!c.stream?.getVideoTracks().length;
+  $('call').hidden = false;
+  $('call').classList.toggle('video', !!c.video);
+  $('call').classList.toggle('live', c.state === 'live');
+  $('call-remote').hidden = !c.video || c.state !== 'live';
+  $('call-self').hidden = !hasCam || !!c.camOff;
+  $('call-self').classList.toggle('mirror', c.facing === 'user');
+  if (hasCam && !$('call-self').srcObject) $('call-self').srcObject = c.stream;
+  $('call-avatar').innerHTML = c.label ? esc(c.label) : (comIcon?.data ? `<img src="${comIcon.data}" alt="" />` : icon('crown', 40, 1.3));
+  $('call-name').textContent = c.name;
+  $('call-status').textContent = c.state === 'live' ? fmtDur((Date.now() - c.startedAt) / 1000)
+    : c.state === 'incoming' ? (c.video ? 'Videollamada' : 'Llamada de voz') : c.state === 'calling' ? 'Llamando…' : 'Conectando…';
+  const end = `<button class="call-end" type="button" data-call="end" aria-label="Colgar">${icon('hangup', 28, 1.5)}</button>`;
+  $('call-btns').innerHTML = c.state === 'incoming'
+    ? `${end}<button class="call-ok" type="button" data-call="ok" aria-label="Contestar">${icon('phone', 28, 1.6)}</button>`
+    : `<button class="call-opt ${c.mutedMic ? 'on' : ''}" type="button" data-call="mute" aria-label="${c.mutedMic ? 'Activar el micrófono' : 'Silenciar el micrófono'}">${icon(c.mutedMic ? 'micOff' : 'mic', 26, 1.5)}</button>${hasCam ? `<button class="call-opt ${c.camOff ? 'on' : ''}" type="button" data-call="cam" aria-label="${c.camOff ? 'Activar la cámara' : 'Apagar la cámara'}">${icon(c.camOff ? 'videoOff' : 'video', 26, 1.5)}</button><button class="call-opt" type="button" data-call="flip" aria-label="Cambiar de cámara">${icon('flip', 26, 1.5)}</button>` : ''}${end}`;
+}
+// Tonos: de llamada para quien llama y timbre para quien recibe
+let toneCtx = null;
+let toneTimer = null;
+function unlockTone() {
+  try { toneCtx = toneCtx || new (window.AudioContext || window.webkitAudioContext)(); toneCtx.resume().catch(() => {}); } catch (_) { /* sin sonido */ }
+}
+function beep(freq, at, len, vol) {
+  const osc = toneCtx.createOscillator();
+  const gain = toneCtx.createGain();
+  osc.frequency.value = freq;
+  gain.gain.setValueAtTime(vol, toneCtx.currentTime + at);
+  gain.gain.setValueAtTime(0, toneCtx.currentTime + at + len);
+  osc.connect(gain).connect(toneCtx.destination);
+  osc.start(toneCtx.currentTime + at);
+  osc.stop(toneCtx.currentTime + at + len + 0.02);
+}
+function playTone(kind) {
+  stopTone();
+  unlockTone();
+  if (!toneCtx) return;
+  const once = kind === 'ring'
+    ? () => { [0, 0.3, 0.6].forEach((at, i) => beep(i % 2 ? 660 : 880, at, 0.26, 0.16)); navigator.vibrate?.(600); }
+    : () => beep(425, 0, 1.5, 0.05);
+  try { once(); } catch (_) { return; }
+  toneTimer = setInterval(() => { try { once(); } catch (_) { /* sin sonido */ } }, kind === 'ring' ? 2200 : 4500);
+}
+function stopTone() { clearInterval(toneTimer); toneTimer = null; }
+$('call-btns').addEventListener('click', (e) => {
+  const act = e.target.closest('[data-call]')?.dataset.call;
+  if (act === 'end') hangUp();
+  if (act === 'ok') acceptCall();
+  if (act === 'mute') toggleCallMute();
+  if (act === 'cam') toggleCamera();
+  if (act === 'flip') flipCamera();
+});
+$('call').addEventListener('click', () => {
+  unlockTone();
+  ['call-audio', 'call-remote'].forEach((id) => { if ($(id).srcObject) $(id).play().catch(() => {}); });
+});
 
 // Conversación privada con la presidencia (vecino) o con una vivienda (cargos)
 let dmMsgs = [];
@@ -857,6 +1241,12 @@ function startDM(mid) {
     await pollDM(true);
   };
   showComposer(true, '', admin ? 'Responde a esta vivienda' : 'Escribe a la presidencia');
+  if (canCall()) {
+    $('view-actions').innerHTML = `<button class="icon-btn sm" type="button" data-callv aria-label="Videollamada" title="Videollamada">${icon('video', 19)}</button>
+      <button class="icon-btn sm" type="button" data-calla aria-label="Llamar" title="Llamar">${icon('phone', 18)}</button>`;
+    $('view-actions').querySelector('[data-calla]').addEventListener('click', () => startCall(false));
+    $('view-actions').querySelector('[data-callv]').addEventListener('click', () => startCall(true));
+  }
   renderDM(true);
   pollDM(true);
 }
@@ -1512,7 +1902,7 @@ async function clearNotifications() {
 function pushWhat() {
   return isAdmin()
     ? 'Te avisaremos de los mensajes y solicitudes de código de los vecinos, de los mensajes del chat, de las encuestas y del tablón.'
-    : 'Te avisaremos de los anuncios del tablón, de las encuestas nuevas y sus resultados, de las respuestas de la presidencia y de los mensajes del chat.';
+    : 'Te avisaremos de los anuncios del tablón, de las encuestas nuevas y sus resultados, de las respuestas y llamadas de la presidencia y de los mensajes de tus chats.';
 }
 function pushBannerHTML() {
   const s = pushState();
@@ -1598,6 +1988,8 @@ function goTo(go) {
   if (!go || !st) return;
   closeSheet();
   if (go.startsWith('thread:')) { if (isAdmin()) openView('thread', go.slice(7)); return; }
+  if (go.startsWith('chat:')) { if (roomById(go.slice(5))) openView('chat', go.slice(5)); else openChats(); return; }
+  if (go === 'chat') { openChats(); return; }
   if (go === 'admin' && !isAdmin()) return;
   if (go === 'contact' && isAdmin()) return openView('threads');
   if (VIEW_TITLES[go] !== undefined) openView(go);
