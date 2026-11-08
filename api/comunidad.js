@@ -24,9 +24,9 @@
 //   POST { action: 'units-add', code, labels }            -> { codes: [{ mid, label, code }] }   (solo cargos)
 //   POST { action: 'unit-code' | 'unit-del' | 'req-del', code, … }        (solo cargos)
 //   POST { action: 'unit-rename', code, mid, label }      (solo cargos: cambia el nombre de la vivienda o local)
-//   POST { action: 'rename', code, name }                 (solo el presidente)
-//   POST { action: 'handover', code, pres, vice }         (solo el presidente: nuevos cargos)
-//   POST { action: 'icon-set', code, data }              (solo el presidente: icono de la comunidad, JPEG en data URL; '' lo quita)
+//   POST { action: 'rename', code, name }                 (cargos)
+//   POST { action: 'handover', code, pres, vice }         (cargos: nuevos presidente y vicepresidente)
+//   POST { action: 'icon-set', code, data }              (cargos: icono de la comunidad, JPEG en data URL; '' lo quita)
 //   POST { action: 'icon-get', code }                     -> { data }
 //   POST { action: 'file-put', code, fid, part, parts, data } (cargos: trozo en base64 de un archivo del tablón)
 //   POST { action: 'file-get', code, fid, part }          -> { data }
@@ -400,7 +400,7 @@ module.exports = async (req, res) => {
     }
     const me = com.units[mid];
     const role = roleOf(com, mid);
-    const admin = !!role;
+    const admin = !!role; // presidente y vicepresidente tienen los mismos permisos
     const saveCom = () => setJSON(K.com(cid), com);
     const ok = (extra = {}) => res.status(200).json({ ok: true, ...extra });
     const needAdmin = () => bad('forbidden', 403);
@@ -678,9 +678,9 @@ module.exports = async (req, res) => {
         return res.status(200).json({ data: data || '', v: com.iconV || 0 });
       }
 
-      // ----- Solo el presidente -----
+      // ----- Nombre, icono y cargos (presidente y vicepresidente, con los mismos permisos) -----
       case 'icon-set': {
-        if (role !== 'pres') return needAdmin();
+        if (!admin) return needAdmin();
         const data = String(body.data || '');
         if (data && (data.length > MAX_ICON || !/^data:image\/jpeg;base64,[A-Za-z0-9+/=]+$/.test(data))) return bad();
         if (data) await redis('SET', K.icon(cid), data);
@@ -690,7 +690,7 @@ module.exports = async (req, res) => {
         return ok({ v: com.iconV });
       }
       case 'rename': {
-        if (role !== 'pres') return needAdmin();
+        if (!admin) return needAdmin();
         const name = cleanText(body.name, MAX_NAME);
         if (!name) return bad();
         com.name = name;
@@ -698,7 +698,7 @@ module.exports = async (req, res) => {
         return ok({ name });
       }
       case 'handover': {
-        if (role !== 'pres') return needAdmin();
+        if (!admin) return needAdmin();
         const pres = body.pres;
         const vice = body.vice || '';
         if (!com.units[pres] || (vice && (!com.units[vice] || vice === pres))) return bad();
@@ -711,7 +711,7 @@ module.exports = async (req, res) => {
         await saveCom();
         if (before.pres !== pres || before.vice !== vice) {
           const text = `La presidencia de la comunidad pasa a la vivienda ${com.units[pres].label}${vice ? ` y la vicepresidencia a la vivienda ${com.units[vice].label}` : ''}. Gracias a quienes han ocupado los cargos hasta ahora.`;
-          await addPost(cid, { title: 'Nuevos cargos de la comunidad', text, by: mid, role: 'pres', kind: 'handover' });
+          await addPost(cid, { title: 'Nuevos cargos de la comunidad', text, by: mid, role: role || 'pres', kind: 'handover' });
           await notify(cid, com, 'all', mid, { title: com.name, body: `👑 Nuevos cargos: presidencia para la vivienda ${com.units[pres].label}${vice ? `, vicepresidencia para la ${com.units[vice].label}` : ''}`, go: 'board', tag: 'board' });
         }
         return ok();

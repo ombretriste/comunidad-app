@@ -1,7 +1,7 @@
 'use strict';
 
 // Versión de la app (se ve en Información). Arreglos y ajustes: 0.x.y; novedades: 0.x.0.
-const APP_VERSION = '0.4.1';
+const APP_VERSION = '0.5.0';
 const APP_NAME = 'Mi comunidad';
 // Uso de la app en Vercel Analytics: cada sección cuenta como una página virtual (nunca datos).
 const track = (path) => { try { window.va?.('pageview', { path }); } catch (_) { /* sin analítica */ } };
@@ -193,7 +193,6 @@ let st = sess.cache; // último estado recibido (se muestra al momento, aunque n
 let offline = false;
 const persist = () => save(SESSION_KEY, sess);
 const isAdmin = () => !!st?.me?.role;
-const isPres = () => st?.me?.role === 'pres';
 
 function login(code, firstState) {
   sess = { code, seen: emptySeen(), cache: firstState || null };
@@ -1047,7 +1046,7 @@ function openPollSheet() {
 const shareLink = () => `${location.origin}${location.pathname}?c=${st.community.pub}`;
 
 function renderAdmin(body) {
-  const pres = isPres();
+  const pres = isAdmin(); // el vicepresidente tiene los mismos permisos que el presidente
   const units = st.units || [];
   const reqs = st.requests || [];
   const presU = units.find((u) => u.role === 'pres');
@@ -1064,7 +1063,7 @@ function renderAdmin(body) {
         <button class="ghost-btn sm-btn" type="button" data-rename>${icon('edit', 15)} Cambiar nombre</button>
         <button class="ghost-btn sm-btn" type="button" data-icon>${icon('image', 15)} ${comIcon?.data ? 'Cambiar icono' : 'Elegir icono'}</button>
         ${comIcon?.data ? `<button class="ghost-btn sm-btn danger" type="button" data-icon-del>${icon('trash', 15)} Quitar icono</button>` : ''}
-      </div>` : '<p class="small muted">Solo el presidente puede cambiar el nombre y el icono.</p>'}
+      </div>` : ''}
     </section>
 
     <section class="card stack">
@@ -1109,9 +1108,8 @@ function renderAdmin(body) {
     <section class="card stack">
       <div class="row-top"><span class="muted small" style="flex:1">Presidente</span><b style="flex:0 0 auto">${presU ? `Vivienda ${esc(presU.label)}` : '—'}</b></div>
       <div class="row-top"><span class="muted small" style="flex:1">Vicepresidente</span><b style="flex:0 0 auto">${viceU ? `Vivienda ${esc(viceU.label)}` : 'Sin nombrar'}</b></div>
-      ${pres ? `<p class="small muted">Al terminar tu mandato, asigna los cargos a las viviendas nuevas. Dejarás de tener permisos de presidente en cuanto lo confirmes.</p>
-      <button class="ghost-btn" type="button" data-handover>${icon('crown', 18)} Modificar presidente y vicepresidente</button>`
-      : '<p class="small muted">Solo el presidente puede cambiar los cargos y el nombre de la comunidad.</p>'}
+      <p class="small muted">El presidente y el vicepresidente tienen los mismos permisos. Al terminar el mandato, asigna los cargos a las viviendas nuevas: si tu vivienda no queda en ningún cargo, dejarás de tener permisos en cuanto lo confirmes.</p>
+      <button class="ghost-btn" type="button" data-handover>${icon('crown', 18)} Modificar presidente y vicepresidente</button>
     </section>`;
 
   body.querySelector('[data-rename]')?.addEventListener('click', openRenameSheet);
@@ -1354,10 +1352,11 @@ function openHandoverSheet() {
     if (pres === cur.pres && vice === cur.vice) { err.textContent = 'No has cambiado nada.'; return; }
     const pl = units.find((u) => u.mid === pres).label;
     const vl = vice ? units.find((u) => u.mid === vice).label : '';
-    const leaving = pres !== st.me.mid;
+    const myNew = pres === st.me.mid ? 'pres' : vice === st.me.mid ? 'vice' : '';
+    const change = myNew === st.me.role ? '' : myNew ? ` Tú pasarás a ser ${myNew === 'pres' ? 'presidente' : 'vicepresidente'}.` : ' Tu vivienda dejará de tener cargo y perderás los permisos de gestión.';
     confirmSheet({
       title: '¿Confirmar los nuevos cargos?',
-      text: `Presidente: vivienda ${pl}. ${vice ? `Vicepresidente: vivienda ${vl}.` : 'Sin vicepresidente.'}${leaving ? ` Tú dejarás de ser presidente${vice === st.me.mid ? ' y pasarás a vicepresidente' : ''}.` : ''}`,
+      text: `Presidente: vivienda ${pl}. ${vice ? `Vicepresidente: vivienda ${vl}.` : 'Sin vicepresidente.'}${change}`,
       ok: 'Confirmar',
       run: async () => {
         await call('handover', { pres, vice });
