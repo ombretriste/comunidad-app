@@ -18,6 +18,8 @@
   <script src="boot.js"></script>
 </head>
 <body>
+  <!-- Solo se desplaza este contenedor (y solo si el contenido no cabe); la página está fija -->
+  <div class="scroller" id="scroller">
   <div id="app" class="app">
     <header class="topbar">
       <div class="brand-wrap">
@@ -29,6 +31,7 @@
       </button>
     </header>
     <main id="home" aria-live="polite"></main>
+  </div>
   </div>
 
   <!-- Secciones (tablón, chat, encuestas…) a pantalla completa -->

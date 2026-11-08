@@ -67,7 +67,6 @@ html {
   text-size-adjust: 100%;
   background: var(--bg);
   height: 100%;
-  overflow: hidden; /* la página no se desplaza ni rebota: solo el contenido, si no cabe */
 }
 html, body {
   margin: 0;
@@ -76,9 +75,10 @@ html, body {
   -webkit-font-smoothing: antialiased;
   overscroll-behavior-y: none;
 }
-/* El cuerpo es la zona que se desplaza (y solo cuando el contenido no cabe). Así, en el iPhone, una
-   pantalla que entra entera no se puede arrastrar hacia arriba con el efecto rebote. */
-body { height: 100%; background: transparent; overflow-x: hidden; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: none; }
+/* En el iPhone la página entera rebotaba al arrastrarla aunque todo cupiera. La página queda fija a
+   toda la pantalla (incluida la zona de abajo) y solo se desplaza .scroller, y solo si no cabe. */
+body { position: fixed; inset: 0; overflow: hidden; background: transparent; }
+.scroller { position: fixed; inset: 0; overflow-x: hidden; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: none; }
 
 /* Fondo: manchas de color difuminadas y ondas casi imperceptibles (solo CSS, estático) */
 body::before {
