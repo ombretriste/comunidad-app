@@ -540,16 +540,17 @@ body.in-view .toast { bottom: calc(84px + env(safe-area-inset-bottom)); }
 }
 
 /* ---------- Siempre en vertical ---------- */
+/* La clase la pone boot.js según la orientación real del móvil. No se usa la media query
+   (orientation: landscape): en Android, al abrir el teclado la página queda más ancha que alta y
+   saltaba este aviso al escribir. */
 .rotate-hint { display: none; }
-@media (orientation: landscape) and (max-height: 500px) {
-  .rotate-hint {
-    position: fixed; inset: 0; z-index: 200; display: flex; flex-direction: column; align-items: center; justify-content: center;
-    gap: 14px; background: var(--bg); color: var(--text); text-align: center;
-  }
-  .rotate-hint svg { color: var(--accent); transform: rotate(-90deg); }
-  .rotate-hint p { margin: 0; font-size: 16px; font-weight: 300; letter-spacing: .02em; }
-  body { overflow: hidden; }
+:root.landscape-phone .rotate-hint {
+  position: fixed; inset: 0; z-index: 200; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 14px; background: var(--bg); color: var(--text); text-align: center;
 }
+:root.landscape-phone .rotate-hint svg { color: var(--accent); transform: rotate(-90deg); }
+:root.landscape-phone .rotate-hint p { margin: 0; font-size: 16px; font-weight: 300; letter-spacing: .02em; }
+:root.landscape-phone body { overflow: hidden; }
 
 /* ---------- Aviso de avisos desactivados ---------- */
 .push-banner { display: flex; align-items: center; gap: 12px; border-color: color-mix(in srgb, var(--warn) 45%, var(--line)); }
