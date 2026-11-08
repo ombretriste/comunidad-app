@@ -1,7 +1,7 @@
 'use strict';
 
 // Versión de la app (se ve en Información). Arreglos y ajustes: 0.x.y; novedades: 0.x.0.
-const APP_VERSION = '0.10.1';
+const APP_VERSION = '0.10.2';
 const APP_NAME = 'Mi comunidad';
 // Uso de la app en Vercel Analytics: cada sección cuenta como una página virtual (nunca datos).
 const track = (path) => { try { window.va?.('pageview', { path }); } catch (_) { /* sin analítica */ } };
@@ -844,11 +844,12 @@ function renderChat(scroll) {
   loadAttImages(body);
   body.querySelector('[data-gc-join]')?.addEventListener('click', () => chooseGroupCall(curRoom.id));
   const canGroup = canCall() && (!me.blocked || admin);
-  $('view-actions').innerHTML = (canGroup ? `<button class="icon-btn sm" type="button" id="chat-call" aria-label="Llamada en grupo" title="Llamada en grupo">${icon('video', 19)}</button>` : '') + (admin
+  $('view-actions').innerHTML = (canGroup ? `<button class="icon-btn sm" type="button" id="chat-call" aria-label="Llamada de voz en grupo" title="Llamada de voz en grupo">${icon('phone', 18)}</button><button class="icon-btn sm" type="button" id="chat-vcall" aria-label="Videollamada en grupo" title="Videollamada en grupo">${icon('video', 19)}</button>` : '') + (admin
     ? `<button class="icon-btn sm" type="button" id="chat-edit" aria-label="Editar el chat" title="Editar el chat">${icon('gear', 18)}</button>
        <button class="icon-btn sm" type="button" id="chat-lock" aria-label="${curRoom.open ? 'Cerrar el chat' : 'Abrir el chat'}" title="${curRoom.open ? 'Cerrar el chat' : 'Abrir el chat'}">${icon(curRoom.open ? 'unlock' : 'lock', 18)}</button>`
     : '');
-  $('chat-call')?.addEventListener('click', () => chooseGroupCall(curRoom.id));
+  $('chat-call')?.addEventListener('click', () => chooseGroupCall(curRoom.id, 'voice'));
+  $('chat-vcall')?.addEventListener('click', () => chooseGroupCall(curRoom.id, 'video'));
   $('chat-lock')?.addEventListener('click', toggleChatOpen);
   $('chat-edit')?.addEventListener('click', () => openRoomEditor(roomById(curRoom.id) || curRoom));
   const to = `Escribe en «${curRoom.name}»`;
@@ -1354,18 +1355,24 @@ let gcall = null;  // { room, name, pid, ice, peers: Map, listed: Set, info: Map
 const gLocal = { mic: true, cam: false, facing: 'user', micTrack: null, camTrack: null };
 const isTouchDev = matchMedia('(pointer: coarse)').matches;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-function chooseGroupCall(roomId) {
+// mode: 'voice' | 'video' (botones de la cabecera) o nada (banner «Unirse»: se elige)
+function chooseGroupCall(roomId, mode) {
   const r = roomById(roomId);
   if (!r) return;
   if (!canCall()) { toast('Este navegador no permite llamadas'); return; }
   const live = r.call > 0;
+  if (live && mode) { joinGroupCall(roomId, mode === 'video'); return; } // ya hay llamada: se entra directamente
+  const what = mode === 'video' ? 'Videollamada en grupo' : mode === 'voice' ? 'Llamada de voz en grupo' : 'Unirte a la llamada';
   const s = openCenter(`
-    <span class="big-ico-sm">${icon('users', 30, 1.4)}</span>
-    <h2 class="sheet-title">${live ? 'Unirte a la llamada' : 'Llamada en grupo'}</h2>
+    <span class="big-ico-sm">${icon(mode === 'video' ? 'video' : mode === 'voice' ? 'phone' : 'users', 30, 1.4)}</span>
+    <h2 class="sheet-title">${what}</h2>
     <p class="small">${live ? `Hay ${plural(r.call, 'persona', 'personas')} en la llamada de «${esc(r.name)}».` : `Se avisará a los miembros de «${esc(r.name)}» para que se unan. Caben hasta 6 personas.`}</p>
-    <div class="center-actions"><button class="ghost-btn" type="button" data-voice>${icon('phone', 18)} Solo voz</button><button class="done-btn" type="button" data-video>${icon('video', 18)} Con vídeo</button></div>`);
-  s.querySelector('[data-voice]').addEventListener('click', () => { closeSheet(); joinGroupCall(roomId, false); });
-  s.querySelector('[data-video]').addEventListener('click', () => { closeSheet(); joinGroupCall(roomId, true); });
+    <div class="center-actions">${mode
+    ? `<button class="ghost-btn" type="button" data-no>Cancelar</button><button class="done-btn" type="button" data-${mode}>${icon(mode === 'video' ? 'video' : 'phone', 18)} Llamar</button>`
+    : `<button class="ghost-btn" type="button" data-voice>${icon('phone', 18)} Solo voz</button><button class="done-btn" type="button" data-video>${icon('video', 18)} Con vídeo</button>`}</div>`);
+  s.querySelector('[data-no]')?.addEventListener('click', closeSheet);
+  s.querySelector('[data-voice]')?.addEventListener('click', () => { closeSheet(); joinGroupCall(roomId, false); });
+  s.querySelector('[data-video]')?.addEventListener('click', () => { closeSheet(); joinGroupCall(roomId, true); });
 }
 async function gGrab(video) {
   const md = navigator.mediaDevices;
