@@ -1,7 +1,7 @@
 'use strict';
 
 // Versión de la app (se ve en Información). Arreglos y ajustes: 0.x.y; novedades: 0.x.0.
-const APP_VERSION = '0.2.0';
+const APP_VERSION = '0.3.0';
 const APP_NAME = 'Mi comunidad';
 // Uso de la app en Vercel Analytics: cada sección cuenta como una página virtual (nunca datos).
 const track = (path) => { try { window.va?.('pageview', { path }); } catch (_) { /* sin analítica */ } };
@@ -45,6 +45,7 @@ const ICONS = {
   clock: '<circle cx="12" cy="12" r="8"/><path d="M12 7.5V12l3 2"/>',
   clip: '<path d="M19 11.5l-7.4 7.4a4.6 4.6 0 0 1-6.5-6.5l7.8-7.8a3.1 3.1 0 0 1 4.4 4.4l-7.6 7.6a1.5 1.5 0 0 1-2.2-2.2l7-7"/>',
   download: '<path d="M12 4v11M7.5 10.5L12 15l4.5-4.5"/><path d="M4 17v1.5A1.5 1.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5V17"/>',
+  zoom: '<circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5l5 5M8 10.5h5M10.5 8v5"/>',
   image: '<rect x="3.5" y="4.5" width="17" height="15" rx="2"/><circle cx="9" cy="10" r="1.8"/><path d="M4 17l5-4.5 4 3.5 2.5-2 4.5 4"/>',
   bell: '<path d="M6 16.5V11a6 6 0 0 1 12 0v5.5l1.5 2h-15z"/><path d="M10 20.5a2 2 0 0 0 4 0"/>',
   bellOff: '<path d="M8.5 5.2A6 6 0 0 1 18 11v4M6 11v5.5l-1.5 2h13"/><path d="M10 20.5a2 2 0 0 0 4 0"/><path d="M4 4l16 16"/>',
@@ -1852,7 +1853,7 @@ function pdfCard(pdf, x0, top, w, h, c, info) {
   para('¿Lo has perdido o lo has olvidado?', `Vuelve a solicitarlo desde la app en «Solicitar mi código», con el código de la comunidad ${info.pub}. Te dejaremos uno nuevo en tu buzón y el anterior dejará de funcionar.`);
   pdf.center(cx, top - h + 14, `Entregado el ${info.date} · La presidencia`, 6.5, 'F1', GREY);
 }
-function cardsPDF(codes) {
+function cardsDoc(codes) {
   const W = PAGE_W / 2;
   const H = PAGE_H / 2;
   const info = { name: st.community.name, pub: st.community.pub, url: appUrl(), date: plainDate(new Date()) };
@@ -1862,12 +1863,13 @@ function cardsPDF(codes) {
     pdf.op(`0.6 G 0.5 w [4 3] 0 d ${fx(W)} 0 m ${fx(W)} ${PAGE_H} l S 0 ${fx(H)} m ${PAGE_W} ${fx(H)} l S [] 0 d`);
     codes.slice(i, i + 4).forEach((c, j) => pdfCard(pdf, (j % 2) * W, PAGE_H - Math.floor(j / 2) * H, W, H, c, info));
   }
-  return pdf.build();
+  return pdf;
 }
+const cardsPDF = (codes) => cardsDoc(codes).build();
 async function downloadCards(codes) {
   track('/tarjetas-pdf');
   const name = `codigos-${slugify(st.community.name) || 'comunidad'}${codes.length === 1 ? `-${slugify(codes[0].label)}` : ''}.pdf`;
-  await deliverFile(cardsPDF(codes), name, 'application/pdf');
+  await openPdfViewer(cardsDoc(codes), name);
 }
 
 // ----- Documentos formales: cabecera con icono y nombre, letra grande y pie con página -----
@@ -1879,7 +1881,7 @@ const BOTTOM = 74;
 const BODY = 12.5;  // cuerpo de texto: legible pegado en el portal
 const LEAD = 18.5;
 
-function formalPDF(spec) {
+function formalDoc(spec) {
   const pdf = new Pdf();
   const name = st.community.name;
   let y = 0;
@@ -1936,10 +1938,11 @@ function formalPDF(spec) {
     } else if (b.t === 'list') {
       const items = b.items.filter(Boolean);
       items.forEach((it, i) => {
-        const lines = wrapText(it, BODY, CW - 30);
+        const ind = b.indent || 0;
+        const lines = wrapText(it, BODY, CW - 30 - ind);
         ensure(Math.min(lines.length, 2) * LEAD);
-        pdf.text(ML + 4, y, b.bullets ? '•' : `${i + 1}.`, BODY, 'F2', NAVY);
-        lines.forEach((l) => { ensure(LEAD); pdf.text(ML + 30, y, l, BODY, 'F1', INK); y -= LEAD; });
+        pdf.text(ML + 4 + ind, y, b.bullets ? '•' : `${i + 1}.`, BODY, 'F2', NAVY);
+        lines.forEach((l) => { ensure(LEAD); pdf.text(ML + 30 + ind, y, l, BODY, 'F1', INK); y -= LEAD; });
         y -= 5;
       });
       y -= 8;
@@ -1953,20 +1956,20 @@ function formalPDF(spec) {
       pdf.op(`${BLUE} RG 1.4 w 0.94 0.96 1 rg ${fx(ML + 10)} ${fx(top - hgt)} ${fx(CW - 20)} ${fx(hgt)} re B`);
       let by = top - 15 - size * 0.72;
       lines.forEach((l) => { pdf.center(PAGE_W / 2, by, l, size, b.mono ? 'F3' : 'F2', BLUE); by -= size + 8; });
-      y = top - hgt - 24;
+      y = top - hgt - 16;
     } else if (b.t === 'step') {
       const lines = wrapText(b.text, 13.5, CW - 46);
       ensure(lines.length * 20 + 10);
       pdf.op(`${NAVY} rg ${circlePath(ML + 13, y + 4.5, 13)} f`);
       pdf.center(ML + 13, y, String(b.n), 13, 'F2', '1 1 1');
       lines.forEach((l) => { pdf.text(ML + 40, y, l, 13.5, 'F1', INK); y -= 20; });
-      y -= 10;
+      y -= 6;
     } else if (b.t === 'close') {
-      ensure(90);
-      y -= 10;
+      if (y - 72 < 44) header(); // la firma puede bajar algo más que el texto, hasta encima del pie
+      y -= 8;
       const when = `${b.place ? `En ${b.place}, a` : 'A'} ${plainDate(new Date())}.`;
       pdf.right(PAGE_W - ML, y, when, BODY, 'F1', INK);
-      y -= 54;
+      y -= 46;
       pdf.op(`${GREY} RG 0.6 w ${fx(PAGE_W - ML - 200)} ${fx(y + 14)} m ${fx(PAGE_W - ML)} ${fx(y + 14)} l S`);
       pdf.center(PAGE_W - ML - 100, y, b.sign || 'La Presidencia', BODY, 'F2', INK);
       y -= 24;
@@ -1997,8 +2000,9 @@ function formalPDF(spec) {
     const pg = `Página ${i + 1} de ${n}`;
     ops.push(textOp(PAGE_W - ML - textWidth(pg, 9), 36, pg, 9, 'F1', GREY));
   });
-  return pdf.build();
+  return pdf;
 }
+const formalPDF = (spec) => formalDoc(spec).build();
 
 // Tabla de asistencia: vivienda, presente, representado, quién le representa y firma
 function attendTable(pdf, b, getY, setY, header) {
@@ -2035,6 +2039,143 @@ function attendTable(pdf, b, getY, setY, header) {
   setY(y);
 }
 
+// ----- Visor de PDF dentro de la app -----
+// Dibuja en <canvas> las mismas órdenes que forman cada página del PDF (solo las que usa esta app:
+// trazos, rellenos, texto, recortes e imágenes), así se ve igual que el archivo sin librerías externas.
+
+const WIN_REV = Object.fromEntries(Object.entries(WINANSI).map(([ch, c]) => [c, ch]));
+const PDF_FONTS = { F1: ['400', 'normal', 'Helvetica, Arial, sans-serif'], F2: ['700', 'normal', 'Helvetica, Arial, sans-serif'], F3: ['700', 'normal', '"Courier New", Courier, monospace'], F4: ['400', 'italic', 'Helvetica, Arial, sans-serif'] };
+function pdfUnescape(raw) {
+  return raw.slice(1, -1).replace(/\\([0-7]{3}|.)/g, (_, e) => {
+    if (/^[0-7]{3}$/.test(e)) { const c = parseInt(e, 8); return WIN_REV[c] || String.fromCharCode(c); }
+    return e;
+  });
+}
+function loadPdfImages(pdf) {
+  return Promise.all(pdf.images.map((im) => new Promise((resolve) => {
+    const url = URL.createObjectURL(new Blob([im.bytes], { type: 'image/jpeg' }));
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => resolve(null);
+    img.src = url;
+  })));
+}
+function drawPdfPage(ctx, ops, scale, images) {
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+  ctx.setTransform(scale, 0, 0, -scale, 0, PAGE_H * scale); // el PDF cuenta la altura desde abajo
+  const g = { fill: '#000', stroke: '#000', font: 'F1', size: 12 };
+  const stack = [];
+  let args = [];
+  let pathOpen = false;
+  let clip = false;
+  let tx = 0;
+  let ty = 0;
+  const rgb = (a) => `rgb(${a.map((v) => Math.round(v * 255)).join(',')})`;
+  const startPath = () => { if (!pathOpen) { ctx.beginPath(); pathOpen = true; } };
+  const endPath = () => { if (clip) { ctx.clip(); clip = false; } pathOpen = false; };
+  const re = /\s*(\((?:\\.|[^\\)])*\)|\[[^\]]*\]|\/[A-Za-z0-9]+|-?\d*\.?\d+(?:e-?\d+)?|[A-Za-z*']+)/gy;
+  const src = ops.join('\n');
+  let m;
+  re.lastIndex = 0;
+  while ((m = re.exec(src))) {
+    const tok = m[1];
+    if (tok[0] === '(' || tok[0] === '[' || tok[0] === '/' || /^-?[\d.]/.test(tok)) { args.push(tok); continue; }
+    const n = args.map(Number);
+    switch (tok) {
+      case 'q': ctx.save(); stack.push({ ...g }); break;
+      case 'Q': ctx.restore(); Object.assign(g, stack.pop() || {}); break;
+      case 'cm': ctx.transform(n[0], n[1], n[2], n[3], n[4], n[5]); break;
+      case 'm': startPath(); ctx.moveTo(n[0], n[1]); break;
+      case 'l': ctx.lineTo(n[0], n[1]); break;
+      case 'c': ctx.bezierCurveTo(n[0], n[1], n[2], n[3], n[4], n[5]); break;
+      case 're': startPath(); ctx.rect(n[0], n[1], n[2], n[3]); break;
+      case 'h': ctx.closePath(); break;
+      case 'S': ctx.strokeStyle = g.stroke; ctx.stroke(); endPath(); break;
+      case 'f': ctx.fillStyle = g.fill; ctx.fill(); endPath(); break;
+      case 'B': ctx.fillStyle = g.fill; ctx.fill(); ctx.strokeStyle = g.stroke; ctx.stroke(); endPath(); break;
+      case 'W': clip = true; break;
+      case 'n': endPath(); break;
+      case 'rg': g.fill = rgb(n); break;
+      case 'RG': g.stroke = rgb(n); break;
+      case 'g': g.fill = rgb([n[0], n[0], n[0]]); break;
+      case 'G': g.stroke = rgb([n[0], n[0], n[0]]); break;
+      case 'w': ctx.lineWidth = n[0]; break;
+      case 'J': ctx.lineCap = ['butt', 'round', 'square'][n[0]] || 'butt'; break;
+      case 'j': ctx.lineJoin = ['miter', 'round', 'bevel'][n[0]] || 'miter'; break;
+      case 'd': ctx.setLineDash(args[0].slice(1, -1).trim().split(/\s+/).filter(Boolean).map(Number)); break;
+      case 'BT': tx = 0; ty = 0; break;
+      case 'Tf': g.font = args[0].slice(1); g.size = n[1]; break;
+      case 'Td': tx += n[0]; ty += n[1]; break;
+      case 'Tj': {
+        const [weight, style, family] = PDF_FONTS[g.font] || PDF_FONTS.F1;
+        ctx.save();
+        ctx.translate(tx, ty);
+        ctx.scale(1, -1);
+        ctx.font = `${style} ${weight} ${g.size}px ${family}`;
+        ctx.fillStyle = g.fill;
+        ctx.fillText(pdfUnescape(args[0]), 0, 0);
+        ctx.restore();
+        break;
+      }
+      case 'Do': {
+        const img = images[Number(args[0].slice(3)) - 1];
+        if (img) { ctx.save(); ctx.translate(0, 1); ctx.scale(1, -1); ctx.drawImage(img, 0, 0, 1, 1); ctx.restore(); }
+        break;
+      }
+      default: break; // ET y otras sin efecto en pantalla
+    }
+    args = [];
+  }
+}
+// Abre el visor con las páginas del documento; desde ahí se comparte, guarda o imprime el PDF
+async function openPdfViewer(pdf, name) {
+  track('/visor-pdf');
+  closeSheet();
+  const bytes = pdf.build();
+  const images = await loadPdfImages(pdf);
+  document.querySelector('.pdf-viewer')?.remove();
+  const el = document.createElement('section');
+  el.className = 'pdf-viewer';
+  el.setAttribute('aria-label', 'Vista previa del PDF');
+  el.innerHTML = `
+    <header class="view-top">
+      <button class="icon-btn back-btn" type="button" data-close aria-label="Cerrar">${icon('close', 20, 1.6)}</button>
+      <div class="view-head"><b>${esc(name)}</b><small>${plural(pdf.pages.length, 'página', 'páginas')}</small></div>
+      <div class="view-actions">
+        <button class="icon-btn sm" type="button" data-zoom aria-label="Ampliar">${icon('zoom', 18)}</button>
+        <button class="icon-btn sm" type="button" data-share aria-label="Compartir, guardar o imprimir">${icon('share', 18)}</button>
+      </div>
+    </header>
+    <div class="pdf-pages"></div>`;
+  document.body.append(el);
+  document.body.classList.add('in-pdf');
+  let zoom = 1;
+  const pages = el.querySelector('.pdf-pages');
+  const draw = () => {
+    const dpr = Math.min(3, window.devicePixelRatio || 1);
+    const cssW = Math.min(820, pages.clientWidth - 24) * zoom;
+    pages.classList.toggle('zoomed', zoom > 1);
+    pages.innerHTML = '';
+    pdf.pages.forEach((ops) => {
+      const c = document.createElement('canvas');
+      c.width = Math.round(cssW * dpr);
+      c.height = Math.round(cssW * dpr * PAGE_H / PAGE_W);
+      c.style.width = `${cssW}px`;
+      c.style.height = `${cssW * PAGE_H / PAGE_W}px`;
+      drawPdfPage(c.getContext('2d'), ops, c.width / PAGE_W, images);
+      pages.append(c);
+    });
+  };
+  draw();
+  const close = () => { el.remove(); document.body.classList.remove('in-pdf'); window.removeEventListener('resize', draw); };
+  window.addEventListener('resize', draw);
+  el.querySelector('[data-close]').addEventListener('click', close);
+  el.querySelector('[data-zoom]').addEventListener('click', () => { zoom = zoom > 1 ? 1 : 2; draw(); });
+  el.querySelector('[data-share]').addEventListener('click', () => deliverFile(bytes, name, 'application/pdf'));
+}
+
 // ----- Plantillas de documentos (parte fija + datos opcionales) -----
 
 const DOCS_KEY = 'micomunidad:docs'; // últimos datos usados en cada plantilla (lugar, localidad, firma…)
@@ -2067,7 +2208,6 @@ const TEMPLATES = [
     fields: [{ k: 'obs', label: 'Texto añadido', type: 'textarea', opt: true }, F.localidad, F.firma],
     build: (v) => ({
       title: 'Nueva app de la comunidad',
-      subtitle: 'Toda la información de la comunidad, en tu móvil',
       blocks: [
         { t: 'p', text: 'La comunidad estrena una aplicación para el móvil. Con ella podrás leer los anuncios de la presidencia, votar en las encuestas, escribir a la presidencia de forma privada y hablar con tus vecinos. No hace falta dar ningún dato personal: ni nombre, ni teléfono, ni correo.' },
         { t: 'h', text: 'Cómo empezar' },
@@ -2076,7 +2216,8 @@ const TEMPLATES = [
         { t: 'step', n: 2, text: 'Pulsa «Solicitar mi código» y escribe el código de la comunidad y tu piso y puerta:' },
         { t: 'big', text: st.community.pub, size: 26, mono: true },
         { t: 'step', n: 3, text: 'En unos días recibirás en tu buzón el código personal de tu vivienda. Escríbelo en «Ya tengo mi código» y listo.' },
-        { t: 'step', n: 4, text: 'Consejo: añade la app a la pantalla de inicio (en iPhone: Compartir › Añadir a pantalla de inicio) y activa los avisos.' },
+        { t: 'step', n: 4, text: 'Consejo: añade la app a la pantalla de inicio del móvil para tenerla siempre a mano y activa los avisos:' },
+        { t: 'list', bullets: true, indent: 36, items: ['iPhone (Safari): botón Compartir › Añadir a pantalla de inicio › Añadir.', 'Android (Chrome): menú de los tres puntos, arriba a la derecha › Instalar aplicación (o Añadir a pantalla de inicio) › Instalar.'] },
         ...(v.obs ? [{ t: 'gap', h: 4 }, { t: 'p', text: v.obs }] : []),
         { t: 'note', text: 'Cada vivienda tiene un único código, personal e intransferible. Si lo pierdes, puedes volver a solicitarlo desde la app.' },
         { t: 'close', place: v.localidad, sign: v.firma },
@@ -2228,7 +2369,7 @@ function openDocEditor(tpl) {
   sheet.querySelector('[data-pdf]').addEventListener('click', async () => {
     const spec = tpl.build(read());
     track(`/documento/${tpl.id}`);
-    try { await deliverFile(formalPDF(spec), fileName(), 'application/pdf'); } catch (e) { sheet.querySelector('[data-err]').textContent = 'No se ha podido crear el PDF.'; }
+    try { await openPdfViewer(formalDoc(spec), fileName()); } catch (e) { sheet.querySelector('[data-err]').textContent = 'No se ha podido crear el PDF.'; }
   });
   sheet.querySelector('[data-board]')?.addEventListener('click', () => {
     const v = read();
