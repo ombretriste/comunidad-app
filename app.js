@@ -1,7 +1,7 @@
 'use strict';
 
 // Versión de la app (se ve en Información). Arreglos y ajustes: 0.x.y; novedades: 0.x.0.
-const APP_VERSION = '0.3.1';
+const APP_VERSION = '0.4.0';
 const APP_NAME = 'Mi comunidad';
 // Uso de la app en Vercel Analytics: cada sección cuenta como una página virtual (nunca datos).
 const track = (path) => { try { window.va?.('pageview', { path }); } catch (_) { /* sin analítica */ } };
@@ -178,6 +178,7 @@ function errorText(e) {
     past: 'La fecha de cierre debe ser futura.',
     gone: 'Ya no existe.',
     'not-configured': 'El servidor aún no tiene base de datos configurada.',
+    'label-taken': 'Ya hay una vivienda o local con ese nombre.',
     'file-missing': 'Un archivo no terminó de subirse. Inténtalo de nuevo.',
   };
   return map[e.code] || 'Algo ha fallado. Inténtalo de nuevo.';
@@ -1263,6 +1264,7 @@ function openUnitSheet(u) {
       <button class="icon-btn sm" type="button" data-close aria-label="Cerrar">${icon('close', 18)}</button></div>
     <p class="small muted">${u.role ? `${ROLE_NAME[u.role]} de la comunidad. ` : ''}${u.seen ? `Último acceso: ${when(u.seen)}.` : 'Aún no ha entrado en la app.'}</p>
     <div class="stack">
+      <button class="ghost-btn" type="button" data-rename-unit>${icon('edit', 18)} Cambiar el nombre</button>
       <button class="ghost-btn" type="button" data-code>${icon('key', 18)} Generar un código nuevo</button>
       ${u.mid !== st.me.mid ? `<button class="ghost-btn" type="button" data-write>${icon('mail', 18)} Escribir a esta vivienda</button>` : ''}
       ${u.role ? '' : `<button class="ghost-btn ${u.blocked ? '' : 'danger'}" type="button" data-block>${icon('ban', 18)} ${u.blocked ? 'Desbloquear en el chat' : 'Bloquear en el chat'}</button>
@@ -1279,6 +1281,7 @@ function openUnitSheet(u) {
     },
   }));
   sheet.querySelector('[data-write]')?.addEventListener('click', () => { closeSheet(); openView('thread', u.mid); });
+  sheet.querySelector('[data-rename-unit]').addEventListener('click', () => openUnitRename(u));
   sheet.querySelector('[data-block]')?.addEventListener('click', async () => {
     try { await call('block', { mid: u.mid, blocked: !u.blocked }); closeSheet(); await refresh(); toast(u.blocked ? 'Desbloqueada' : 'Bloqueada en el chat'); } catch (e) { toast(errorText(e)); }
   });
@@ -1286,6 +1289,36 @@ function openUnitSheet(u) {
     title: `¿Eliminar la vivienda ${u.label}?`, text: 'Su código dejará de funcionar y se borrará su conversación con la presidencia. Sus votos en encuestas abiertas dejarán de contar.', ok: 'Eliminar', danger: true,
     run: async () => { await call('unit-del', { mid: u.mid }); await refresh(); toast('Vivienda eliminada'); },
   }));
+}
+
+// Nombre de una vivienda o local (p. ej. «Local 1» → «Local izquierda»). El código no cambia.
+function openUnitRename(u) {
+  const sheet = openSheet('Cambiar el nombre');
+  sheet.innerHTML = `
+    <div class="sheet-head"><h2 class="sheet-title">Cambiar el nombre</h2>
+      <button class="icon-btn sm" type="button" data-close aria-label="Cerrar">${icon('close', 18)}</button></div>
+    <input class="title-input" id="ur-label" maxlength="24" value="${esc(u.label)}" autocomplete="off" />
+    <p class="small muted">Es el nombre con el que se ve esta vivienda o local en el chat, en los mensajes y en los documentos. Su código sigue siendo el mismo.</p>
+    <p class="form-error" id="ur-err" role="alert"></p>
+    <div class="editor-actions"><button class="ghost-btn" type="button" data-back>Volver</button><button class="done-btn" type="button" id="ur-ok">Guardar</button></div>`;
+  const input = sheet.querySelector('#ur-label');
+  const err = sheet.querySelector('#ur-err');
+  sheet.querySelector('[data-close]').addEventListener('click', closeSheet);
+  sheet.querySelector('[data-back]').addEventListener('click', () => openUnitSheet(u));
+  input.addEventListener('input', () => { err.textContent = ''; });
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') sheet.querySelector('#ur-ok').click(); });
+  sheet.querySelector('#ur-ok').addEventListener('click', async () => {
+    const label = input.value.trim();
+    if (!label) { err.textContent = 'Escribe un nombre.'; return; }
+    if (label === u.label) { closeSheet(); return; }
+    try {
+      await call('unit-rename', { mid: u.mid, label });
+      closeSheet();
+      await refresh();
+      toast(`Ahora se llama «${label}»`);
+    } catch (e) { err.textContent = errorText(e); }
+  });
+  setTimeout(() => input.select(), 60);
 }
 
 // Cambio de cargos: lo lanza el presidente al terminar su mandato

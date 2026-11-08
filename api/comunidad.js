@@ -23,6 +23,7 @@
 //   POST { action: 'poll-vote', code, id, opt }           -> { ok }
 //   POST { action: 'units-add', code, labels }            -> { codes: [{ mid, label, code }] }   (solo cargos)
 //   POST { action: 'unit-code' | 'unit-del' | 'req-del', code, … }        (solo cargos)
+//   POST { action: 'unit-rename', code, mid, label }      (solo cargos: cambia el nombre de la vivienda o local)
 //   POST { action: 'rename', code, name }                 (solo el presidente)
 //   POST { action: 'handover', code, pres, vice }         (solo el presidente: nuevos cargos)
 //   POST { action: 'icon-set', code, data }              (solo el presidente: icono de la comunidad, JPEG en data URL; '' lo quita)
@@ -625,6 +626,17 @@ module.exports = async (req, res) => {
         const left = reqs.filter((r) => !sameLabel(r.label, com.units[body.mid].label));
         if (left.length !== reqs.length) await setJSON(K.req(cid), left);
         return ok({ code, label: com.units[body.mid].label });
+      }
+      case 'unit-rename': {
+        if (!admin) return needAdmin();
+        const u = com.units[body.mid];
+        if (!u) return bad('gone', 404);
+        const label = cleanLabel(body.label);
+        if (!label) return bad();
+        if (Object.entries(com.units).some(([m, x]) => m !== body.mid && sameLabel(x.label, label))) return bad('label-taken', 409);
+        u.label = label; // el código de la vivienda sigue siendo el mismo
+        await saveCom();
+        return ok({ label });
       }
       case 'unit-del': {
         if (!admin) return needAdmin();
