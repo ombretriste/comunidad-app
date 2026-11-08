@@ -15,7 +15,7 @@
 //   Con el código de la vivienda en `code`:
 //   POST { action: 'state', code }                        -> todo lo de la pantalla principal
 //   POST { action: 'post' | 'post-del' | 'post-pin', code, … }            (tablón; solo cargos)
-//   POST { action: 'chat-poll', code, room?, after }      -> { msgs, open, blocked }   (room: 'general' o un chat con miembros)
+//   POST { action: 'chat-poll', code, room?, after }      -> { msgs, open, blocked }   (room: id del chat)
 //   POST { action: 'chat-send', code, room?, text }       -> { s }
 //   POST { action: 'chat-del' | 'chat-open' | 'block', code, room?, … }   (moderación; solo cargos)
 //   POST { action: 'room-create' | 'room-edit' | 'room-del', code, … }    (cargos: chats con solo algunas viviendas)
@@ -88,7 +88,7 @@ const MAX_PARTS = 12;          // ≈12 MB por archivo (la app limita a 10 MB)
 const MAX_FILES = 5;           // archivos por anuncio
 const UPLOAD_TTL_S = 86400;    // un archivo subido que no llega a publicarse se borra al día
 const MAX_ICON = 160000;       // icono de la comunidad (JPEG pequeño en base64)
-const MAX_ROOMS = 20;          // chats además del general
+const MAX_ROOMS = 20;          // chats por comunidad
 const MAX_SIG = 60000;         // señal de llamada (descripción de la conexión; con vídeo es larga)
 const CALL_TTL_S = 120;        // las señales solo sirven mientras se conecta la llamada
 const CALL_RING_MS = 45e3;     // lo que suena una llamada sin contestar
@@ -163,13 +163,12 @@ const K = {
   rings: (cid) => `vec:c:${cid}:rings`,
 };
 
-// Chats: el general (todas las viviendas) y los que creen los cargos con algunas viviendas
-function roomOf(com, id) {
-  if (!id || id === 'general') return { id: 'general', name: 'Todos los vecinos', members: null, open: com.chatOpen !== false };
-  return (com.rooms || []).find((r) => r.id === id) || null;
-}
+// Chats: no hay ninguno por defecto (desde la 0.8.0); los crean los cargos, para todas las viviendas
+// (members: null, también las que se den de alta después) o para algunas. El antiguo chat «general»
+// ya no se muestra.
+const roomOf = (com, id) => (com.rooms || []).find((r) => r.id === id) || null;
 const canSee = (com, room, mid) => !!room && (isAdmin(com, mid) || !room.members || room.members.includes(mid));
-const visibleRooms = (com, mid) => [roomOf(com, 'general'), ...(com.rooms || [])].filter((r) => canSee(com, r, mid));
+const visibleRooms = (com, mid) => (com.rooms || []).filter((r) => canSee(com, r, mid));
 
 // Servidores para conectar las llamadas: STUN siempre; TURN (Cloudflare) si Vercel tiene
 // CF_TURN_KEY_ID y CF_TURN_API_TOKEN: con datos móviles suele hacer falta para que conecten.
@@ -569,7 +568,7 @@ module.exports = async (req, res) => {
         const msg = { s, t: Date.now(), mid, text };
         await pipeline([['RPUSH', K.roomChat(cid, room.id), JSON.stringify(msg)], ['LTRIM', K.roomChat(cid, room.id), -KEEP_CHAT, -1]]);
         await notify(cid, com, room.members || 'all', mid, {
-          title: room.id === 'general' ? `Chat · ${com.name}` : `${room.name} · ${com.name}`,
+          title: `${room.name} · ${com.name}`,
           body: `${me.label}${role ? ` (${role === 'pres' ? 'Presidente' : 'Vicepresidente'})` : ''}: ${short(text)}`,
           go: `chat:${room.id}`, tag: `chat-${room.id}`,
         });
@@ -594,8 +593,7 @@ module.exports = async (req, res) => {
         if (!admin) return needAdmin();
         const room = roomOf(com, body.room);
         if (!room) return bad('gone', 404);
-        if (room.id === 'general') com.chatOpen = !!body.open;
-        else room.open = !!body.open;
+        room.open = !!body.open;
         await saveCom();
         return ok({ open: !!body.open });
       }
@@ -603,8 +601,9 @@ module.exports = async (req, res) => {
       case 'room-edit': {
         if (!admin) return needAdmin();
         const name = cleanText(body.name, 40);
-        const members = [...new Set((Array.isArray(body.members) ? body.members : []).filter((m) => com.units[m]))];
-        if (!name) return bad();
+        // all: todas las viviendas, también las que se den de alta después
+        const members = body.all ? null : [...new Set((Array.isArray(body.members) ? body.members : []).filter((m) => com.units[m]))];
+        if (!name || (members && !members.length)) return bad();
         com.rooms = com.rooms || [];
         if (action === 'room-create') {
           if (com.rooms.length >= MAX_ROOMS) return bad('too-many-rooms', 409);
@@ -612,12 +611,12 @@ module.exports = async (req, res) => {
           do id = randomId(4); while (com.rooms.some((r) => r.id === id));
           com.rooms.push({ id, name, members, open: true, t: Date.now() });
           await saveCom();
-          await notify(cid, com, members, mid, { title: com.name, body: `💬 Te han añadido al chat «${name}»`, go: `chat:${id}`, tag: `chat-${id}` });
+          await notify(cid, com, members || 'all', mid, { title: com.name, body: `💬 ${members ? 'Te han añadido al' : 'Nuevo'} chat «${name}»`, go: `chat:${id}`, tag: `chat-${id}` });
           return ok({ id });
         }
         const room = com.rooms.find((r) => r.id === body.room);
         if (!room) return bad('gone', 404);
-        const added = members.filter((m) => !room.members.includes(m));
+        const added = !members ? [] : room.members ? members.filter((m) => !room.members.includes(m)) : [];
         room.name = name;
         room.members = members;
         await saveCom();
@@ -809,7 +808,7 @@ module.exports = async (req, res) => {
         if (!u) return bad('gone', 404);
         if (isAdmin(com, body.mid)) return bad('is-admin', 409);
         delete com.units[body.mid];
-        (com.rooms || []).forEach((r) => { r.members = r.members.filter((m) => m !== body.mid); });
+        (com.rooms || []).forEach((r) => { if (r.members) r.members = r.members.filter((m) => m !== body.mid); });
         await dropUnitDevices(cid, body.mid);
         await pipeline([['DEL', K.code(u.h)], ['DEL', K.dm(cid, body.mid)], ['HDEL', K.dmIndex(cid), body.mid]]);
         await saveCom();

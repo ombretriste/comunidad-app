@@ -1,7 +1,7 @@
 'use strict';
 
 // Versión de la app (se ve en Información). Arreglos y ajustes: 0.x.y; novedades: 0.x.0.
-const APP_VERSION = '0.7.1';
+const APP_VERSION = '0.8.0';
 const APP_NAME = 'Mi comunidad';
 // Uso de la app en Vercel Analytics: cada sección cuenta como una página virtual (nunca datos).
 const track = (path) => { try { window.va?.('pageview', { path }); } catch (_) { /* sin analítica */ } };
@@ -197,7 +197,6 @@ function errorText(e) {
 const emptySeen = () => ({ board: 0, rooms: {}, dm: 0, threads: {} });
 let sess = { code: '', seen: emptySeen(), cache: null, ...load(SESSION_KEY, {}) };
 sess.seen = { ...emptySeen(), ...(sess.seen || {}) };
-if (sess.seen.chat && !sess.seen.rooms.general) sess.seen.rooms.general = sess.seen.chat; // antes había un solo chat
 let st = sess.cache; // último estado recibido (se muestra al momento, aunque no haya conexión)
 let offline = false;
 const persist = () => save(SESSION_KEY, sess);
@@ -259,7 +258,6 @@ function renderHome() {
   const pendingVotes = openPolls.filter((p) => p.mine === null).length;
   const rooms = st.rooms || [];
   const chatNew = rooms.filter(roomUnread).length;
-  const general = rooms.find((r) => r.id === 'general');
   const dmNew = !admin && st.dm && st.dm.from === 'junta' && st.dm.t > sess.seen.dm;
   const threadsNew = admin ? (st.threads || []).filter((t) => t.from === 'vecino' && t.t > (sess.seen.threads[t.mid] || 0)).length : 0;
   const reqs = admin ? (st.requests || []).length : 0;
@@ -296,7 +294,7 @@ function renderHome() {
       </button>`}
       <button class="tile ${chatNew ? 'hot' : ''}" type="button" data-go="chat">
         <span class="tile-ico">${icon('chat', 24)}</span>
-        <span class="tile-text"><b>${rooms.length > 1 ? 'Chats de vecinos' : 'Chat de vecinos'}</b><small>${me.blocked ? 'Estás bloqueado en los chats' : chatNew ? (rooms.length > 1 ? plural(chatNew, 'chat con mensajes nuevos', 'chats con mensajes nuevos') : 'Mensajes nuevos') : rooms.length > 1 ? plural(rooms.length, 'chat', 'chats') : general && !general.open ? 'Cerrado por la presidencia' : 'Habla con todos los vecinos'}</small></span>
+        <span class="tile-text"><b>Chats de vecinos</b><small>${me.blocked ? 'Estás bloqueado en los chats' : chatNew ? plural(chatNew, 'chat con mensajes nuevos', 'chats con mensajes nuevos') : rooms.length ? plural(rooms.length, 'chat', 'chats') : admin ? 'Crea el primer chat' : 'Aún no hay chats'}</small></span>
         ${badge(chatNew)}
       </button>
       <button class="tile ${pendingVotes ? 'hot' : ''}" type="button" data-go="polls">
@@ -556,7 +554,7 @@ function openView(name, arg) {
   $('view-body').innerHTML = '';
   $('composer').hidden = true;
   $('composer-note').hidden = true;
-  if (name === 'chat') startChat(arg || 'general');
+  if (name === 'chat') startChat(arg);
   else if (name === 'contact' || name === 'thread') startDM(name === 'thread' ? arg : null);
   else renderView();
   $('view-body').scrollTop = 0;
@@ -748,14 +746,14 @@ function messagesHTML(list, intro = '') {
   return html;
 }
 
-// Chats de vecinos: el general (todas las viviendas) y los que crean los cargos con algunas
+// Chats de vecinos: no hay ninguno por defecto; los crean los cargos, para todas las viviendas o para algunas
 // viviendas (p. ej. la comisión de obras). El presidente y el vicepresidente están en todos y los moderan.
 const roomsOf = () => st?.rooms || [];
 const roomById = (id) => roomsOf().find((r) => r.id === id);
 const roomUnread = (r) => r.last.s > (sess.seen.rooms[r.id] || 0) && !r.last.mine;
 const membersLabel = (r) => (r.members ? `${plural(r.members.length, 'vivienda', 'viviendas')} y la presidencia` : 'Todas las viviendas');
 function openChats() {
-  if (roomsOf().length <= 1 && !isAdmin()) openView('chat', 'general');
+  if (roomsOf().length === 1 && !isAdmin()) openView('chat', roomsOf()[0].id);
   else openView('rooms');
 }
 function renderRooms(body) {
@@ -763,7 +761,8 @@ function renderRooms(body) {
   $('view-sub').textContent = st.community.name;
   body.innerHTML = `
     ${admin ? `<div class="add-row"><button class="done-btn" type="button" data-new-room>${icon('plus', 18, 1.8)} Nuevo chat</button></div>
-    <p class="note banner">${icon('users', 16)} <span>Crea chats con solo algunas viviendas, por ejemplo la comisión de obras. El presidente y el vicepresidente estáis en todos y los moderáis.</span></p>` : ''}
+    <p class="note banner">${icon('users', 16)} <span>Crea chats para todas las viviendas o solo para algunas, por ejemplo la comisión de obras. El presidente y el vicepresidente estáis en todos y los moderáis.</span></p>` : ''}
+    ${roomsOf().length ? '' : `<div class="empty"><span class="tile-ico">${icon('chat', 28)}</span><h3>Aún no hay chats</h3><p>${admin ? 'Pulsa «Nuevo chat» para crear el primero.' : 'Cuando la presidencia cree un chat en el que estés, aparecerá aquí.'}</p></div>`}
     <div class="rows">${roomsOf().map((r) => `
       <button class="row ${roomUnread(r) ? 'unread' : ''}" type="button" data-room="${r.id}">
         <span class="tile-ico">${icon(r.open ? (r.members ? 'users' : 'chat') : 'lock', 20)}</span>
@@ -783,10 +782,11 @@ let curRoom = null; // { id, name, members, open }
 function startChat(id) {
   chatMsgs = [];
   chatAfter = 0;
-  const r = roomById(id) || roomById('general');
-  curRoom = { ...(r || { id: 'general', name: 'Todos los vecinos', members: null, open: true }) };
-  $('view-title').textContent = curRoom.id === 'general' ? 'Chat de vecinos' : curRoom.name;
-  $('view-sub').textContent = curRoom.id === 'general' ? st.community.name : membersLabel(curRoom);
+  const r = roomById(id);
+  if (!r) { setTimeout(openChats, 0); return; }
+  curRoom = { ...r };
+  $('view-title').textContent = curRoom.name;
+  $('view-sub').textContent = membersLabel(curRoom);
   view.tick = pollChat;
   view.timer = setInterval(() => { if (document.visibilityState === 'visible') pollChat(); }, CHAT_EVERY_MS);
   composerState.send = async (text) => {
@@ -824,8 +824,8 @@ function renderChat(scroll) {
   const stick = scroll || nearBottom(body);
   const admin = isAdmin();
   const me = st.me;
-  const general = curRoom.id === 'general';
-  const intro = `<p class="note banner">${icon('users', 16)} <span>${general ? 'Chat abierto a todas las viviendas.' : `Chat de ${membersLabel(curRoom).toLowerCase()}: solo lo veis quienes estáis en él.`} ${admin ? 'Toca un mensaje para borrarlo o bloquear a esa vivienda.' : 'La presidencia modera el chat.'}</span></p>`;
+  const general = !curRoom.members;
+  const intro = `<p class="note banner">${icon('users', 16)} <span>${general ? 'Chat de todas las viviendas.' : `Chat de ${membersLabel(curRoom).toLowerCase()}: solo lo veis quienes estáis en él.`} ${admin ? 'Toca un mensaje para borrarlo o bloquear a esa vivienda.' : 'La presidencia modera el chat.'}</span></p>`;
   body.innerHTML = chatMsgs.length || !curRoom.open
     ? messagesHTML(chatMsgs.map((m) => ({
       key: m.s, t: m.t, mine: m.mid === me.mid, who: m.mid === me.mid ? '' : m.label, role: m.role, text: m.text, deleted: !!m.del, board: !!m.role,
@@ -833,12 +833,12 @@ function renderChat(scroll) {
     : `${intro}<div class="empty"><span class="tile-ico">${icon('chat', 28)}</span><h3>Aún no hay mensajes</h3><p>${general ? 'Saluda a tus vecinos.' : 'Escribe el primer mensaje.'}</p></div>`;
   if (stick) body.scrollTop = body.scrollHeight;
   $('view-actions').innerHTML = admin
-    ? `${general ? '' : `<button class="icon-btn sm" type="button" id="chat-edit" aria-label="Editar el chat" title="Editar el chat">${icon('gear', 18)}</button>`}
+    ? `<button class="icon-btn sm" type="button" id="chat-edit" aria-label="Editar el chat" title="Editar el chat">${icon('gear', 18)}</button>
        <button class="icon-btn sm" type="button" id="chat-lock" aria-label="${curRoom.open ? 'Cerrar el chat' : 'Abrir el chat'}" title="${curRoom.open ? 'Cerrar el chat' : 'Abrir el chat'}">${icon(curRoom.open ? 'unlock' : 'lock', 18)}</button>`
     : '';
   $('chat-lock')?.addEventListener('click', toggleChatOpen);
   $('chat-edit')?.addEventListener('click', () => openRoomEditor(roomById(curRoom.id) || curRoom));
-  const to = general ? 'Escribe a todos los vecinos' : `Escribe en «${curRoom.name}»`;
+  const to = `Escribe en «${curRoom.name}»`;
   if (me.blocked) showComposer(false, 'La presidencia te ha bloqueado en los chats. Puedes leerlos, pero no escribir.');
   else if (!curRoom.open && !admin) showComposer(false, 'El chat está cerrado por la presidencia.');
   else showComposer(true, '', curRoom.open ? to : 'Chat cerrado: solo escribe la presidencia');
@@ -863,30 +863,36 @@ function toggleChatOpen() {
 function openRoomEditor(room) {
   const units = (st.units || []).filter((u) => !u.role);
   const chosen = new Set(room?.members || []);
+  let all = room ? !room.members : true;
   const sheet = openSheet(room ? 'Editar el chat' : 'Nuevo chat');
   const draw = () => {
     const name = sheet.querySelector('#rm-name')?.value ?? room?.name ?? '';
     sheet.innerHTML = `
       <div class="sheet-head"><h2 class="sheet-title">${room ? 'Editar el chat' : 'Nuevo chat'}</h2>
         <button class="icon-btn sm" type="button" data-close aria-label="Cerrar">${icon('close', 18)}</button></div>
-      <input class="title-input" id="rm-name" maxlength="40" placeholder="Nombre, p. ej. Comisión de obras" value="${esc(name)}" autocomplete="off" />
-      <p class="opt-label">Viviendas en el chat (${chosen.size})</p>
-      <p class="small muted">El presidente y el vicepresidente están siempre.</p>
-      <div class="row-btns"><button class="ghost-btn sm-btn" type="button" data-all>Todas</button><button class="ghost-btn sm-btn" type="button" data-none>Ninguna</button></div>
-      <div class="pick-list">${units.map((u) => `<label class="check-row pick"><input type="checkbox" data-mid="${u.mid}" ${chosen.has(u.mid) ? 'checked' : ''} /> <span>${esc(u.label)}</span></label>`).join('') || '<p class="small muted">Aún no hay viviendas dadas de alta.</p>'}</div>
+      <input class="title-input" id="rm-name" maxlength="40" placeholder="Nombre, p. ej. Vecinos o Comisión de obras" value="${esc(name)}" autocomplete="off" />
+      <p class="opt-label">¿Quién está en el chat?</p>
+      <div class="seg" role="group">
+        <button type="button" data-who="all" class="${all ? 'on' : ''}">Todas las viviendas</button>
+        <button type="button" data-who="some" class="${all ? '' : 'on'}">Solo algunas</button>
+      </div>
+      <p class="small muted">${all ? 'Incluye también las viviendas que se den de alta más adelante.' : `Elegidas: ${chosen.size}.`} El presidente y el vicepresidente están siempre.</p>
+      ${all ? '' : `<div class="row-btns"><button class="ghost-btn sm-btn" type="button" data-all>Marcar todas</button><button class="ghost-btn sm-btn" type="button" data-none>Ninguna</button></div>
+      <div class="pick-list">${units.map((u) => `<label class="check-row pick"><input type="checkbox" data-mid="${u.mid}" ${chosen.has(u.mid) ? 'checked' : ''} /> <span>${esc(u.label)}</span></label>`).join('') || '<p class="small muted">Aún no hay viviendas dadas de alta.</p>'}</div>`}
       <p class="form-error" id="rm-err" role="alert"></p>
       <div class="editor-actions">${room ? `<button class="ghost-btn danger" type="button" data-del>${icon('trash', 16)} Eliminar</button>` : '<span></span>'}<button class="done-btn" type="button" data-save>${room ? 'Guardar' : 'Crear chat'}</button></div>`;
     sheet.querySelector('[data-close]').addEventListener('click', closeSheet);
-    sheet.querySelectorAll('[data-mid]').forEach((c) => c.addEventListener('change', () => { if (c.checked) chosen.add(c.dataset.mid); else chosen.delete(c.dataset.mid); sheet.querySelector('.opt-label').textContent = `Viviendas en el chat (${chosen.size})`; }));
-    sheet.querySelector('[data-all]').addEventListener('click', () => { units.forEach((u) => chosen.add(u.mid)); draw(); });
-    sheet.querySelector('[data-none]').addEventListener('click', () => { chosen.clear(); draw(); });
+    sheet.querySelectorAll('[data-who]').forEach((b) => b.addEventListener('click', () => { all = b.dataset.who === 'all'; draw(); }));
+    sheet.querySelectorAll('[data-mid]').forEach((c) => c.addEventListener('change', () => { if (c.checked) chosen.add(c.dataset.mid); else chosen.delete(c.dataset.mid); }));
+    sheet.querySelector('[data-all]')?.addEventListener('click', () => { units.forEach((u) => chosen.add(u.mid)); draw(); });
+    sheet.querySelector('[data-none]')?.addEventListener('click', () => { chosen.clear(); draw(); });
     sheet.querySelector('[data-save]').addEventListener('click', async () => {
       const n = sheet.querySelector('#rm-name').value.trim();
       const err = sheet.querySelector('#rm-err');
       if (!n) { err.textContent = 'Ponle un nombre al chat.'; return; }
-      if (!chosen.size) { err.textContent = 'Elige al menos una vivienda.'; return; }
+      if (!all && !chosen.size) { err.textContent = 'Elige al menos una vivienda.'; return; }
       try {
-        const r = await call(room ? 'room-edit' : 'room-create', { room: room?.id, name: n, members: [...chosen] });
+        const r = await call(room ? 'room-edit' : 'room-create', { room: room?.id, name: n, all, members: [...chosen] });
         closeSheet();
         await refresh();
         toast(room ? 'Chat guardado' : 'Chat creado');
