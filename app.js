@@ -1,7 +1,7 @@
 'use strict';
 
 // Versión de la app (se ve en Información). Arreglos y ajustes: 0.x.y; novedades: 0.x.0.
-const APP_VERSION = '0.7.0';
+const APP_VERSION = '0.7.1';
 const APP_NAME = 'Mi comunidad';
 // Uso de la app en Vercel Analytics: cada sección cuenta como una página virtual (nunca datos).
 const track = (path) => { try { window.va?.('pageview', { path }); } catch (_) { /* sin analítica */ } };
@@ -178,7 +178,7 @@ function errorText(e) {
     'no-community': 'No existe ninguna comunidad con ese código.',
     'bad-code': 'Ese código no es válido. Revisa que esté bien escrito.',
     forbidden: 'Solo el presidente o el vicepresidente pueden hacer esto.',
-    blocked: 'La administración te ha bloqueado en el chat.',
+    blocked: 'La presidencia te ha bloqueado en el chat.',
     closed: 'Ya está cerrado.',
     'is-admin': 'No se puede hacer con el presidente ni el vicepresidente.',
     'too-many-units': 'Se ha llegado al máximo de viviendas.',
@@ -296,7 +296,7 @@ function renderHome() {
       </button>`}
       <button class="tile ${chatNew ? 'hot' : ''}" type="button" data-go="chat">
         <span class="tile-ico">${icon('chat', 24)}</span>
-        <span class="tile-text"><b>${rooms.length > 1 ? 'Chats de vecinos' : 'Chat de vecinos'}</b><small>${me.blocked ? 'Estás bloqueado en los chats' : chatNew ? (rooms.length > 1 ? plural(chatNew, 'chat con mensajes nuevos', 'chats con mensajes nuevos') : 'Mensajes nuevos') : rooms.length > 1 ? plural(rooms.length, 'chat', 'chats') : general && !general.open ? 'Cerrado por la administración' : 'Habla con todos los vecinos'}</small></span>
+        <span class="tile-text"><b>${rooms.length > 1 ? 'Chats de vecinos' : 'Chat de vecinos'}</b><small>${me.blocked ? 'Estás bloqueado en los chats' : chatNew ? (rooms.length > 1 ? plural(chatNew, 'chat con mensajes nuevos', 'chats con mensajes nuevos') : 'Mensajes nuevos') : rooms.length > 1 ? plural(rooms.length, 'chat', 'chats') : general && !general.open ? 'Cerrado por la presidencia' : 'Habla con todos los vecinos'}</small></span>
         ${badge(chatNew)}
       </button>
       <button class="tile ${pendingVotes ? 'hot' : ''}" type="button" data-go="polls">
@@ -740,7 +740,7 @@ function messagesHTML(list, intro = '') {
       <div class="msg ${m.mine ? 'me' : 'other'} ${grouped ? 'grouped' : ''} ${m.board ? 'board' : ''}" data-key="${esc(m.key)}">
         <div class="bubble ${m.deleted ? 'deleted' : ''}">
           ${!grouped && m.who ? `<span class="who">${esc(m.who)}${m.role ? ` <span class="role-chip">${ROLE_NAME[m.role]}</span>` : ''}</span>` : ''}
-          <span class="text">${m.deleted ? 'Mensaje eliminado por la administración' : linkify(m.text)}</span><span class="meta">${hhmm(m.t)}</span>
+          <span class="text">${m.deleted ? 'Mensaje eliminado por la presidencia' : linkify(m.text)}</span><span class="meta">${hhmm(m.t)}</span>
         </div>
       </div>`;
     prev = m;
@@ -769,7 +769,7 @@ function renderRooms(body) {
         <span class="tile-ico">${icon(r.open ? (r.members ? 'users' : 'chat') : 'lock', 20)}</span>
         <span class="row-main">
           <span class="row-top"><b>${esc(r.name)}</b>${r.last.t ? `<small>${shortWhen(r.last.t)}</small>` : ''}</span>
-          <span class="row-sub">${r.open ? membersLabel(r) : 'Cerrado por la administración'}</span>
+          <span class="row-sub">${r.open ? membersLabel(r) : 'Cerrado por la presidencia'}</span>
         </span>
         ${roomUnread(r) ? '<span class="badge">•</span>' : ''}
       </button>`).join('')}</div>`;
@@ -829,7 +829,7 @@ function renderChat(scroll) {
   body.innerHTML = chatMsgs.length || !curRoom.open
     ? messagesHTML(chatMsgs.map((m) => ({
       key: m.s, t: m.t, mine: m.mid === me.mid, who: m.mid === me.mid ? '' : m.label, role: m.role, text: m.text, deleted: !!m.del, board: !!m.role,
-    })), intro) + (!curRoom.open ? `<p class="sys">${icon('lock', 13)} La administración ha cerrado el chat</p>` : '')
+    })), intro) + (!curRoom.open ? `<p class="sys">${icon('lock', 13)} La presidencia ha cerrado el chat</p>` : '')
     : `${intro}<div class="empty"><span class="tile-ico">${icon('chat', 28)}</span><h3>Aún no hay mensajes</h3><p>${general ? 'Saluda a tus vecinos.' : 'Escribe el primer mensaje.'}</p></div>`;
   if (stick) body.scrollTop = body.scrollHeight;
   $('view-actions').innerHTML = admin
@@ -839,9 +839,9 @@ function renderChat(scroll) {
   $('chat-lock')?.addEventListener('click', toggleChatOpen);
   $('chat-edit')?.addEventListener('click', () => openRoomEditor(roomById(curRoom.id) || curRoom));
   const to = general ? 'Escribe a todos los vecinos' : `Escribe en «${curRoom.name}»`;
-  if (me.blocked) showComposer(false, 'La administración te ha bloqueado en los chats. Puedes leerlos, pero no escribir.');
-  else if (!curRoom.open && !admin) showComposer(false, 'El chat está cerrado por la administración.');
-  else showComposer(true, '', curRoom.open ? to : 'Chat cerrado: solo escribe la administración');
+  if (me.blocked) showComposer(false, 'La presidencia te ha bloqueado en los chats. Puedes leerlos, pero no escribir.');
+  else if (!curRoom.open && !admin) showComposer(false, 'El chat está cerrado por la presidencia.');
+  else showComposer(true, '', curRoom.open ? to : 'Chat cerrado: solo escribe la presidencia');
 }
 function toggleChatOpen() {
   const open = !curRoom.open;
