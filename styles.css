@@ -73,12 +73,19 @@ html, body {
   color: var(--text);
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
-  overscroll-behavior-y: none;
+  overscroll-behavior: none;
 }
-/* En el iPhone la página entera rebotaba al arrastrarla aunque todo cupiera. La página queda fija a
-   toda la pantalla (incluida la zona de abajo) y solo se desplaza .scroller, y solo si no cabe. */
-body { position: fixed; inset: 0; overflow: hidden; background: transparent; }
-.scroller { position: fixed; inset: 0; overflow-x: hidden; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: none; }
+/* iPhone con la app instalada (barra de estado transparente): la página recibe una altura MENOR que la
+   pantalla (sin la franja de la barra de estado). Por eso:
+   - la página no lleva contenido propio (todo va en .scroller), así no hay nada que desplazar;
+   - el fondo (body::before) no se recorta: se pinta hasta abajo del todo, sin franja negra;
+   - .scroller mide la pantalla real (100lvh) y solo se desplaza si el contenido no cabe en ella. */
+body { height: 100%; background: transparent; }
+.scroller {
+  position: fixed; top: 0; left: 0; right: 0;
+  height: 100vh; height: 100lvh;
+  overflow-x: hidden; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: none;
+}
 
 /* Fondo: manchas de color difuminadas y ondas casi imperceptibles (solo CSS, estático) */
 body::before {
