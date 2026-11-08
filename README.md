@@ -1,6 +1,6 @@
 # Mi comunidad
 
-App web instalable (PWA) para una comunidad de vecinos. Versión 0.4.0.
+App web instalable (PWA) para una comunidad de vecinos. Versión 0.4.1.
 
 - **Tablón de anuncios**: solo publican el presidente y el vicepresidente; se pueden fijar y borrar.
 - **Contacta con la presidencia**: cada vivienda tiene una conversación privada que solo leen el presidente y el vicepresidente.

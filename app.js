@@ -1,7 +1,7 @@
 'use strict';
 
 // Versión de la app (se ve en Información). Arreglos y ajustes: 0.x.y; novedades: 0.x.0.
-const APP_VERSION = '0.4.0';
+const APP_VERSION = '0.4.1';
 const APP_NAME = 'Mi comunidad';
 // Uso de la app en Vercel Analytics: cada sección cuenta como una página virtual (nunca datos).
 const track = (path) => { try { window.va?.('pageview', { path }); } catch (_) { /* sin analítica */ } };
@@ -1054,9 +1054,21 @@ function renderAdmin(body) {
   const viceU = units.find((u) => u.role === 'vice');
   body.innerHTML = `
     <section class="card stack">
-      <p class="label">Comunidad</p>
-      <div class="row-top wrap"><b class="com-name">${esc(st.community.name)}</b>
-        ${pres ? `<button class="ghost-btn sm-btn" type="button" data-rename>${icon('edit', 15)} Cambiar nombre</button>` : ''}</div>
+      <p class="label">Nombre e icono</p>
+      <div class="identity">
+        <span class="icon-preview">${comIcon?.data ? `<img src="${comIcon.data}" alt="" />` : logoSVG(56)}</span>
+        <span class="tile-text"><b class="com-name">${esc(st.community.name)}</b>
+          <small>${comIcon?.data ? 'El nombre y el icono salen arriba en la app y en todos los documentos PDF.' : 'El nombre sale arriba en la app y en los PDF. Elige un icono de tu galería para que salga junto a él.'}</small></span>
+      </div>
+      ${pres ? `<div class="row-btns">
+        <button class="ghost-btn sm-btn" type="button" data-rename>${icon('edit', 15)} Cambiar nombre</button>
+        <button class="ghost-btn sm-btn" type="button" data-icon>${icon('image', 15)} ${comIcon?.data ? 'Cambiar icono' : 'Elegir icono'}</button>
+        ${comIcon?.data ? `<button class="ghost-btn sm-btn danger" type="button" data-icon-del>${icon('trash', 15)} Quitar icono</button>` : ''}
+      </div>` : '<p class="small muted">Solo el presidente puede cambiar el nombre y el icono.</p>'}
+    </section>
+
+    <section class="card stack">
+      <p class="label">Código de la comunidad</p>
       <div class="pub-code"><small>Código de la comunidad</small><b>${esc(st.community.pub)}</b></div>
       <p class="small muted">Compártelo con los vecinos: con él, cada uno pide su código desde la app sin dar datos personales. Las solicitudes te llegan aquí y el código se le deja en su buzón.</p>
       <div class="row-btns">
@@ -1065,11 +1077,6 @@ function renderAdmin(body) {
       </div>
     </section>
 
-    <section class="card icon-card">
-      <span class="icon-preview">${comIcon?.data ? `<img src="${comIcon.data}" alt="" />` : logoSVG(56)}</span>
-      <span class="tile-text"><b>Icono de la comunidad</b><small>${comIcon?.data ? 'Sale arriba en la app y en todos los documentos PDF.' : 'Elige una imagen de la galería: saldrá en la app y en todos los PDF junto al nombre.'}</small>
-        ${pres ? `<span class="row-btns" style="margin-top:8px"><button class="ghost-btn sm-btn" type="button" data-icon>${icon('image', 15)} ${comIcon?.data ? 'Cambiar' : 'Elegir imagen'}</button>${comIcon?.data ? `<button class="ghost-btn sm-btn danger" type="button" data-icon-del>${icon('trash', 15)} Quitar</button>` : ''}</span>` : ''}</span>
-    </section>
     <button class="row docs-row" type="button" data-docs>
       <span class="tile-ico">${icon('pdf', 22)}</span>
       <span class="row-main"><span class="row-top"><b>Documentos</b></span><span class="row-sub wrap">Convocatorias de junta, comisión de obras, listado de asistencia, comunicados y aviso de la app, en PDF o en el tablón.</span></span>
