@@ -1,7 +1,7 @@
 'use strict';
 
 // Versión de la app (se ve en Información). Arreglos y ajustes: 0.x.y; novedades: 0.x.0.
-const APP_VERSION = '0.8.0';
+const APP_VERSION = '0.8.1';
 const APP_NAME = 'Mi comunidad';
 // Uso de la app en Vercel Analytics: cada sección cuenta como una página virtual (nunca datos).
 const track = (path) => { try { window.va?.('pageview', { path }); } catch (_) { /* sin analítica */ } };
@@ -569,7 +569,7 @@ function closeView(quiet) {
 }
 $('view-back').addEventListener('click', () => {
   if (view?.name === 'thread') return openView('threads');
-  if (view?.name === 'chat' && (roomsOf().length > 1 || isAdmin())) return openView('rooms');
+  if (view?.name === 'chat') return openView('rooms');
   closeView();
 });
 
@@ -753,8 +753,7 @@ const roomById = (id) => roomsOf().find((r) => r.id === id);
 const roomUnread = (r) => r.last.s > (sess.seen.rooms[r.id] || 0) && !r.last.mine;
 const membersLabel = (r) => (r.members ? `${plural(r.members.length, 'vivienda', 'viviendas')} y la presidencia` : 'Todas las viviendas');
 function openChats() {
-  if (roomsOf().length === 1 && !isAdmin()) openView('chat', roomsOf()[0].id);
-  else openView('rooms');
+  openView('rooms'); // siempre la lista de chats primero, también para los vecinos
 }
 function renderRooms(body) {
   const admin = isAdmin();
