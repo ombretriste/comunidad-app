@@ -688,3 +688,4 @@ body.in-pdf { overflow: hidden; }
 .gc-round.off { background: #f1f5f9; color: #0b1730; border-color: transparent; }
 .gc-round.end { width: 68px; border-radius: 28px; background: #e5344f; border-color: transparent; }
 body.in-call { overflow: hidden; }
+.att-gone { display: block; padding: 12px; font-size: 12.5px; font-style: italic; opacity: .8; }

@@ -1,7 +1,7 @@
 'use strict';
 
 // Versión de la app (se ve en Información). Arreglos y ajustes: 0.x.y; novedades: 0.x.0.
-const APP_VERSION = '0.10.0';
+const APP_VERSION = '0.10.1';
 const APP_NAME = 'Mi comunidad';
 // Uso de la app en Vercel Analytics: cada sección cuenta como una página virtual (nunca datos).
 const track = (path) => { try { window.va?.('pageview', { path }); } catch (_) { /* sin analítica */ } };
@@ -1261,7 +1261,7 @@ function loadAttImages(root) {
     try {
       if (!attUrls.has(f.fid)) attUrls.set(f.fid, URL.createObjectURL(new Blob([await fetchFile(f)], { type: f.type || 'image/jpeg' })));
       img.src = attUrls.get(f.fid);
-    } catch (_) { img.closest('.att-img')?.classList.add('broken'); }
+    } catch (_) { const b = img.closest('.att-img'); if (b) { b.classList.add('broken'); b.innerHTML = '<span class="att-gone">Esta foto ya no está disponible (los adjuntos se guardan un mes)</span>'; } }
   });
 }
 $('view-body').addEventListener('click', (e) => {
@@ -3047,7 +3047,7 @@ async function openFileViewer(f) {
   const onResize = () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => { if (pdf && alive) drawPdf(); }, 250); };
   window.addEventListener('resize', onResize);
   el.querySelector('[data-zoom]').addEventListener('click', () => { zoom = zoom > 1 ? 1 : 2; drawPdf(); });
-  try { bytes = await fetchFile(f); } catch (e) { if (alive) msg(errorText(e)); return; }
+  try { bytes = await fetchFile(f); } catch (e) { if (alive) msg(e.code === 'gone' ? 'Este archivo ya no está disponible: los adjuntos de los chats y las conversaciones se guardan un mes.' : errorText(e)); return; }
   if (!alive) return;
   el.querySelector('[data-share]').disabled = false;
   if (isPdfFile(f)) {
