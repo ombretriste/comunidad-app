@@ -1,0 +1,518 @@
+// Función serverless de Vercel: datos de «Mi comunidad» (tablón, chat de vecinos, mensajes a la
+// presidencia y encuestas de una comunidad de vecinos).
+//
+// Nadie da datos personales. Cada vivienda tiene un código propio que el presidente imprime y deja en
+// su buzón; con ese código se entra en la app. El servidor solo guarda el resumen SHA-256 del código,
+// así que tampoco lo puede leer: si un vecino lo pierde, se genera uno nuevo y el viejo deja de valer.
+// Los permisos (publicar en el tablón, moderar el chat, encuestas, viviendas) se comprueban AQUÍ,
+// según el cargo de la vivienda que llama: presidente ('pres') o vicepresidente ('vice').
+//
+//   GET  /api/comunidad                                   -> { configured }
+//   POST { action: 'create', name, label }                -> { code, pub }       (nueva comunidad; quien la crea es el presidente)
+//   POST { action: 'request', pub, label }                -> { ok, name }        (un vecino pide su código; lo ve la presidencia)
+//   POST { action: 'community', pub }                     -> { name }            (nombre a partir del código público)
+//   Con el código de la vivienda en `code`:
+//   POST { action: 'state', code }                        -> todo lo de la pantalla principal
+//   POST { action: 'post' | 'post-del' | 'post-pin', code, … }            (tablón; solo cargos)
+//   POST { action: 'chat-poll', code, after }             -> { msgs, open, blocked }
+//   POST { action: 'chat-send', code, text }              -> { s }
+//   POST { action: 'chat-del' | 'chat-open' | 'block', code, … }          (moderación; solo cargos)
+//   POST { action: 'dm-get', code, mid? }                 -> { msgs }   (vecino: su conversación; cargos: la de `mid`)
+//   POST { action: 'dm-send', code, text, mid? }          -> { ok }
+//   POST { action: 'poll-create' | 'poll-close' | 'poll-del', code, … }   (encuestas; solo cargos)
+//   POST { action: 'poll-vote', code, id, opt }           -> { ok }
+//   POST { action: 'units-add', code, labels }            -> { codes: [{ mid, label, code }] }   (solo cargos)
+//   POST { action: 'unit-code' | 'unit-del' | 'req-del', code, … }        (solo cargos)
+//   POST { action: 'rename', code, name }                 (solo el presidente)
+//   POST { action: 'handover', code, pres, vice }         (solo el presidente: nuevos cargos)
+//
+// Almacenamiento: Upstash Redis (integración de Vercel), vía su API REST. Todas las claves empiezan
+// por «vec:», así que puede compartir base de datos con otras apps sin mezclarse.
+
+function findRedisEnv(env = process.env) {
+  const known = [['KV_REST_API_URL', 'KV_REST_API_TOKEN'], ['UPSTASH_REDIS_REST_URL', 'UPSTASH_REDIS_REST_TOKEN']];
+  for (const [u, t] of known) if (env[u] && env[t]) return { url: env[u], token: env[t] };
+  for (const k of Object.keys(env)) {
+    const m = k.match(/^(.*)(REST_API_URL|REDIS_REST_URL)$/);
+    if (!m || !/^https?:\/\//.test(env[k] || '')) continue;
+    const tk = m[1] + m[2].replace('URL', 'TOKEN');
+    if (env[tk]) return { url: env[k], token: env[tk] };
+  }
+  return { url: null, token: null };
+}
+const { url: REDIS_URL, token: REDIS_TOKEN } = findRedisEnv();
+const crypto = globalThis.crypto || require('crypto').webcrypto;
+
+const CODE_CHARS = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ'; // sin 0/O ni 1/I/L, que se confunden en papel
+const CODE_LEN = 12;           // 12 caracteres ≈ 60 bits: imposible de adivinar a ciegas
+const PUB_LEN = 6;             // código público de la comunidad (para pedir el código propio)
+const MAX_UNITS = 400;         // viviendas por comunidad
+const MAX_LABEL = 24;
+const MAX_NAME = 60;
+const MAX_TEXT = 2000;         // mensaje de chat o a la presidencia
+const MAX_POST = 6000;         // anuncio del tablón
+const KEEP_POSTS = 150;
+const KEEP_CHAT = 500;
+const KEEP_DM = 300;
+const KEEP_POLLS = 60;
+const KEEP_REQ = 200;
+const MAX_FAILS = 20;          // códigos equivocados por IP cada 15 minutos
+const CREATES_PER_DAY = 5;     // comunidades nuevas por IP y día
+const REQUESTS_PER_HOUR = 10;  // solicitudes de código por IP y hora
+const MSGS_PER_MIN = 20;       // mensajes por minuto y vivienda
+
+async function redis(...command) {
+  const res = await fetch(REDIS_URL, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${REDIS_TOKEN}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(command),
+  });
+  const json = await res.json();
+  if (json.error) throw new Error(json.error);
+  return json.result;
+}
+async function pipeline(commands) {
+  if (!commands.length) return [];
+  const res = await fetch(`${REDIS_URL}/pipeline`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${REDIS_TOKEN}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(commands),
+  });
+  const json = await res.json();
+  if (!Array.isArray(json)) throw new Error(json.error || 'pipeline');
+  return json.map((r) => r.result);
+}
+const getJSON = async (key, fallback) => { const raw = await redis('GET', key); try { return raw ? JSON.parse(raw) : fallback; } catch { return fallback; } };
+const setJSON = (key, value) => redis('SET', key, JSON.stringify(value));
+
+async function sha256hex(text) {
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+function randomCode(len) {
+  const bytes = crypto.getRandomValues(new Uint8Array(len));
+  return [...bytes].map((b) => CODE_CHARS[b % 32]).join('');
+}
+const randomId = (n = 10) => [...crypto.getRandomValues(new Uint8Array(n))].map((b) => b.toString(16).padStart(2, '0')).join('');
+const normCode = (c) => String(c || '').toUpperCase().replace(/[^0-9A-Z]/g, '');
+const fmtCode = (c) => c.match(/.{1,4}/g).join('-');
+const codeHash = (c) => sha256hex(`micomunidad:${normCode(c)}`);
+const cleanText = (s, max) => String(s ?? '').replace(/\r\n?/g, '\n').replace(/[\u0000-\u0008\u000b-\u001f]/g, '').trim().slice(0, max);
+const cleanLabel = (s) => cleanText(s, MAX_LABEL).replace(/\s+/g, ' ');
+const sameLabel = (a, b) => a.toLowerCase().replace(/[\s.ºª°-]/g, '') === b.toLowerCase().replace(/[\s.ºª°-]/g, '');
+
+const K = {
+  code: (h) => `vec:k:${h}`,
+  pub: (p) => `vec:p:${p}`,
+  com: (cid) => `vec:c:${cid}`,
+  board: (cid) => `vec:c:${cid}:board`,
+  chat: (cid) => `vec:c:${cid}:chat`,
+  chatSeq: (cid) => `vec:c:${cid}:cs`,
+  dm: (cid, mid) => `vec:c:${cid}:dm:${mid}`,
+  dmIndex: (cid) => `vec:c:${cid}:dmi`,
+  polls: (cid) => `vec:c:${cid}:polls`,
+  req: (cid) => `vec:c:${cid}:req`,
+};
+
+const clientIp = (req) => String(req.headers?.['x-forwarded-for'] || req.headers?.['x-real-ip'] || 'desconocida').split(',')[0].trim();
+// Límite por ventana de tiempo: true si ya se ha llegado
+async function limited(key, max, seconds) {
+  const [n] = await pipeline([['INCR', key], ['EXPIRE', key, seconds, 'NX']]);
+  return Number(n) > max;
+}
+
+const roleOf = (com, mid) => (com.pres === mid ? 'pres' : com.vice === mid ? 'vice' : '');
+const isAdmin = (com, mid) => !!roleOf(com, mid);
+
+// Asigna un código nuevo a una vivienda (el anterior deja de valer)
+async function issueCode(cid, com, mid) {
+  const code = randomCode(CODE_LEN);
+  const h = await codeHash(code);
+  const old = com.units[mid].h;
+  com.units[mid].h = h;
+  com.units[mid].issued = Date.now();
+  const cmds = [['SET', K.code(h), `${cid}:${mid}`]];
+  if (old) cmds.push(['DEL', K.code(old)]);
+  await pipeline(cmds);
+  return fmtCode(code);
+}
+function newUnit(com, label) {
+  let mid;
+  do mid = randomId(5); while (com.units[mid]);
+  com.units[mid] = { label, created: Date.now(), h: '', blocked: false, seen: 0 };
+  return mid;
+}
+
+// Cierra las encuestas vencidas y publica su resultado en el tablón
+function pollResult(poll, com) {
+  const counts = poll.opts.map(() => 0);
+  Object.values(poll.votes || {}).forEach((i) => { if (counts[i] !== undefined) counts[i]++; });
+  const total = counts.reduce((a, b) => a + b, 0);
+  const max = Math.max(0, ...counts);
+  const winners = max > 0 ? poll.opts.filter((_, i) => counts[i] === max) : [];
+  return { counts, total, units: Object.keys(com.units).length, winners };
+}
+async function closePoll(cid, com, poll, by) {
+  poll.closed = Date.now();
+  poll.result = pollResult(poll, com);
+  const r = poll.result;
+  const lines = poll.opts.map((o, i) => `• ${o}: ${r.counts[i]} ${r.counts[i] === 1 ? 'voto' : 'votos'}${r.total ? ` (${Math.round((r.counts[i] / r.total) * 100)} %)` : ''}`);
+  const verdict = !r.total ? 'No ha votado nadie.'
+    : r.winners.length === 1 ? `Opción más votada: «${r.winners[0]}».`
+    : `Empate entre ${r.winners.map((w) => `«${w}»`).join(' y ')}.`;
+  const text = `${verdict}\n\n${lines.join('\n')}\n\nHan votado ${r.total} de ${r.units} viviendas.`;
+  await addPost(cid, { title: `Resultado de la encuesta: ${poll.q}`, text, by: by || '', role: by ? roleOf(com, by) : 'auto', kind: 'result', poll: poll.id });
+}
+async function addPost(cid, post) {
+  const board = await getJSON(K.board(cid), []);
+  board.push({ id: randomId(6), t: Date.now(), pin: false, ...post });
+  // se guardan los últimos KEEP_POSTS, pero los fijados no se pierden
+  while (board.length > KEEP_POSTS) {
+    const i = board.findIndex((p) => !p.pin);
+    board.splice(i < 0 ? 0 : i, 1);
+  }
+  await setJSON(K.board(cid), board);
+}
+async function loadPolls(cid, com) {
+  const polls = await getJSON(K.polls(cid), []);
+  let changed = false;
+  for (const p of polls) {
+    if (!p.closed && p.closes && p.closes <= Date.now()) { await closePoll(cid, com, p, ''); changed = true; }
+  }
+  if (changed) await setJSON(K.polls(cid), polls);
+  return polls;
+}
+// Lo que ve cada vivienda de una encuesta: el recuento solo al cerrarse (los cargos lo ven siempre)
+function pollView(p, com, mid) {
+  const admin = isAdmin(com, mid);
+  const live = pollResult(p, com);
+  return {
+    id: p.id, q: p.q, desc: p.desc || '', opts: p.opts, t: p.t, closes: p.closes || 0, closed: p.closed || 0,
+    mine: p.votes && p.votes[mid] !== undefined ? p.votes[mid] : null,
+    voters: live.total, units: live.units,
+    result: p.closed ? p.result : admin ? live : null,
+  };
+}
+const unitName = (com, mid) => (com.units[mid] ? com.units[mid].label : 'Vivienda eliminada');
+
+module.exports = async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  if (!REDIS_URL || !REDIS_TOKEN) {
+    const vars = Object.keys(process.env).filter((k) => /KV|REDIS|UPSTASH|REST_API/.test(k)).sort();
+    return res.status(req.method === 'GET' ? 200 : 503).json({ configured: false, error: 'not-configured', vars });
+  }
+  if (req.method === 'GET') {
+    try { await redis('PING'); return res.status(200).json({ configured: true }); } catch (err) { return res.status(200).json({ configured: false, error: `redis: ${err.message}` }); }
+  }
+  if (req.method !== 'POST') return res.status(405).json({ error: 'method' });
+
+  let body = req.body || {};
+  if (typeof body === 'string') { try { body = JSON.parse(body); } catch { body = {}; } }
+  const { action } = body;
+  const bad = (error = 'bad-request', status = 400) => res.status(status).json({ error });
+  const ipKey = await sha256hex(clientIp(req));
+
+  try {
+    // ---------- Sin código ----------
+    if (action === 'create') {
+      const name = cleanText(body.name, MAX_NAME) || 'Mi comunidad';
+      const label = cleanLabel(body.label);
+      if (!label) return bad();
+      if (await limited(`vec:rl:create:${ipKey}`, CREATES_PER_DAY, 86400)) return bad('too-many', 429);
+      const cid = randomId(8);
+      let pub;
+      for (let i = 0; i < 10; i++) {
+        pub = randomCode(PUB_LEN);
+        if (await redis('SET', K.pub(pub), cid, 'NX')) break;
+        pub = '';
+      }
+      if (!pub) return bad('busy', 503);
+      const com = { id: cid, name, pub, created: Date.now(), pres: '', vice: '', chatOpen: true, units: {} };
+      const mid = newUnit(com, label);
+      com.pres = mid;
+      const code = await issueCode(cid, com, mid);
+      await setJSON(K.com(cid), com);
+      await addPost(cid, { title: `Bienvenidos a ${name}`, text: 'Este es el tablón de anuncios de la comunidad. Aquí publicará la presidencia las noticias, convocatorias y resultados de las encuestas.', by: mid, role: 'pres' });
+      return res.status(200).json({ code, pub, name });
+    }
+
+    if (action === 'community' || action === 'request') {
+      const pub = normCode(body.pub);
+      if (pub.length !== PUB_LEN) return bad('no-community', 404);
+      const cid = await redis('GET', K.pub(pub));
+      const com = cid && await getJSON(K.com(cid), null);
+      if (!com) return bad('no-community', 404);
+      if (action === 'community') return res.status(200).json({ name: com.name });
+      const label = cleanLabel(body.label);
+      if (!label) return bad();
+      if (await limited(`vec:rl:req:${ipKey}`, REQUESTS_PER_HOUR, 3600)) return bad('too-many', 429);
+      const reqs = await getJSON(K.req(cid), []);
+      if (!reqs.some((r) => sameLabel(r.label, label))) {
+        reqs.push({ id: randomId(6), label, t: Date.now() });
+        await setJSON(K.req(cid), reqs.slice(-KEEP_REQ));
+      }
+      return res.status(200).json({ ok: true, name: com.name });
+    }
+
+    // ---------- Con el código de la vivienda ----------
+    const failKey = `vec:rl:fail:${ipKey}`;
+    if ((Number(await redis('GET', failKey)) || 0) >= MAX_FAILS) return bad('too-many', 429);
+    const norm = normCode(body.code);
+    const link = norm.length === CODE_LEN ? await redis('GET', K.code(await codeHash(norm))) : null;
+    const [cid, mid] = String(link || '').split(':');
+    const com = link && await getJSON(K.com(cid), null);
+    if (!com || !com.units[mid]) {
+      await pipeline([['INCR', failKey], ['EXPIRE', failKey, 900, 'NX']]);
+      return bad('bad-code', 401);
+    }
+    const me = com.units[mid];
+    const role = roleOf(com, mid);
+    const admin = !!role;
+    const saveCom = () => setJSON(K.com(cid), com);
+    const ok = (extra = {}) => res.status(200).json({ ok: true, ...extra });
+    const needAdmin = () => bad('forbidden', 403);
+
+    switch (action) {
+      case 'state': {
+        if (Date.now() - (me.seen || 0) > 3600e3) { me.seen = Date.now(); await saveCom(); }
+        const [board, polls, chatTail, dmIndex, reqs] = await Promise.all([
+          getJSON(K.board(cid), []),
+          loadPolls(cid, com),
+          redis('LRANGE', K.chat(cid), -1, -1),
+          redis('HGETALL', K.dmIndex(cid)),
+          admin ? getJSON(K.req(cid), []) : [],
+        ]);
+        const last = chatTail && chatTail[0] ? JSON.parse(chatTail[0]) : null;
+        const idx = {};
+        for (let i = 0; i < (dmIndex || []).length; i += 2) idx[dmIndex[i]] = JSON.parse(dmIndex[i + 1]);
+        const out = {
+          community: { name: com.name, pub: com.pub, chatOpen: com.chatOpen },
+          me: { mid, label: me.label, role, blocked: !!me.blocked },
+          board: board.slice().reverse().map((p) => ({ ...p, byLabel: p.by ? unitName(com, p.by) : '' })),
+          polls: polls.slice().reverse().map((p) => pollView(p, com, mid)),
+          chat: last ? { s: last.s, t: last.t, mine: last.mid === mid } : { s: 0, t: 0 },
+          dm: idx[mid] || null,
+        };
+        if (admin) {
+          out.threads = Object.entries(idx).filter(([m]) => com.units[m]).map(([m, v]) => ({ mid: m, label: unitName(com, m), ...v })).sort((a, b) => b.t - a.t);
+          out.requests = reqs.slice().reverse();
+          out.units = Object.entries(com.units).map(([m, u]) => ({ mid: m, label: u.label, role: roleOf(com, m), blocked: !!u.blocked, issued: u.issued || 0, seen: u.seen || 0 }))
+            .sort((a, b) => a.label.localeCompare(b.label, 'es', { numeric: true }));
+        }
+        return res.status(200).json(out);
+      }
+
+      // ----- Tablón -----
+      case 'post': {
+        if (!admin) return needAdmin();
+        const title = cleanText(body.title, 140);
+        const text = cleanText(body.text, MAX_POST);
+        if (!title && !text) return bad();
+        await addPost(cid, { title, text, by: mid, role, pin: !!body.pin });
+        return ok();
+      }
+      case 'post-del':
+      case 'post-pin': {
+        if (!admin) return needAdmin();
+        const board = await getJSON(K.board(cid), []);
+        const i = board.findIndex((p) => p.id === body.id);
+        if (i < 0) return bad('gone', 404);
+        if (action === 'post-del') board.splice(i, 1);
+        else board[i].pin = !!body.pin;
+        await setJSON(K.board(cid), board);
+        return ok();
+      }
+
+      // ----- Chat de vecinos -----
+      case 'chat-poll': {
+        const after = Math.max(0, Number(body.after) || 0);
+        const raw = await redis('LRANGE', K.chat(cid), after ? -KEEP_CHAT : -200, -1);
+        const msgs = (raw || []).map((m) => JSON.parse(m)).filter((m) => m.s > after)
+          .map((m) => ({ ...m, label: unitName(com, m.mid), role: roleOf(com, m.mid), text: m.del ? '' : m.text }));
+        // los mensajes borrados después se avisan aparte para quitarlos de la pantalla
+        const dels = (raw || []).map((m) => JSON.parse(m)).filter((m) => m.del && m.s <= after).map((m) => m.s);
+        return res.status(200).json({ msgs, dels, open: com.chatOpen, blocked: !!me.blocked });
+      }
+      case 'chat-send': {
+        const text = cleanText(body.text, MAX_TEXT);
+        if (!text) return bad();
+        if (me.blocked) return bad('blocked', 403);
+        if (!com.chatOpen && !admin) return bad('closed', 403);
+        if (await limited(`vec:rl:msg:${cid}:${mid}`, MSGS_PER_MIN, 60)) return bad('too-many', 429);
+        const s = await redis('INCR', K.chatSeq(cid));
+        const msg = { s, t: Date.now(), mid, text };
+        await pipeline([['RPUSH', K.chat(cid), JSON.stringify(msg)], ['LTRIM', K.chat(cid), -KEEP_CHAT, -1]]);
+        return ok({ s, t: msg.t });
+      }
+      case 'chat-del': {
+        if (!admin) return needAdmin();
+        const raw = await redis('LRANGE', K.chat(cid), 0, -1);
+        const i = (raw || []).findIndex((m) => JSON.parse(m).s === Number(body.s));
+        if (i < 0) return bad('gone', 404);
+        const m = JSON.parse(raw[i]);
+        m.del = Date.now();
+        m.delBy = mid;
+        m.text = '';
+        await redis('LSET', K.chat(cid), i, JSON.stringify(m));
+        return ok();
+      }
+      case 'chat-open': {
+        if (!admin) return needAdmin();
+        com.chatOpen = !!body.open;
+        await saveCom();
+        return ok({ open: com.chatOpen });
+      }
+      case 'block': {
+        if (!admin) return needAdmin();
+        const u = com.units[body.mid];
+        if (!u) return bad('gone', 404);
+        if (isAdmin(com, body.mid)) return bad('is-admin', 409);
+        u.blocked = !!body.blocked;
+        await saveCom();
+        return ok();
+      }
+
+      // ----- Mensajes a la presidencia (solo los leen el presidente y el vicepresidente) -----
+      case 'dm-get': {
+        const who = admin && body.mid ? body.mid : mid;
+        if (!admin && who !== mid) return needAdmin();
+        if (!com.units[who]) return bad('gone', 404);
+        const raw = await redis('LRANGE', K.dm(cid, who), 0, -1);
+        const msgs = (raw || []).map((m) => JSON.parse(m)).map((m) => ({ ...m, byLabel: unitName(com, m.by), byRole: m.role || '' }));
+        return res.status(200).json({ msgs, label: unitName(com, who) });
+      }
+      case 'dm-send': {
+        const text = cleanText(body.text, MAX_TEXT);
+        if (!text) return bad();
+        // un cargo escribe en la conversación de otra vivienda; un vecino solo en la suya
+        const who = admin && body.mid && body.mid !== mid ? body.mid : mid;
+        if (!com.units[who]) return bad('gone', 404);
+        if (await limited(`vec:rl:msg:${cid}:${mid}`, MSGS_PER_MIN, 60)) return bad('too-many', 429);
+        const fromBoard = who !== mid; // respuesta de la presidencia
+        const msg = { id: randomId(6), t: Date.now(), by: mid, role: fromBoard ? role : '', text };
+        await pipeline([
+          ['RPUSH', K.dm(cid, who), JSON.stringify(msg)],
+          ['LTRIM', K.dm(cid, who), -KEEP_DM, -1],
+          ['HSET', K.dmIndex(cid), who, JSON.stringify({ t: msg.t, from: fromBoard ? 'junta' : 'vecino', text: text.slice(0, 120) })],
+        ]);
+        return ok({ t: msg.t });
+      }
+
+      // ----- Encuestas -----
+      case 'poll-create': {
+        if (!admin) return needAdmin();
+        const q = cleanText(body.q, 200);
+        const opts = (Array.isArray(body.opts) ? body.opts : []).map((o) => cleanText(o, 120)).filter(Boolean);
+        if (!q || opts.length < 2 || opts.length > 10 || new Set(opts.map((o) => o.toLowerCase())).size !== opts.length) return bad();
+        const closes = Number(body.closes) || 0;
+        if (closes && closes < Date.now() + 60e3) return bad('past');
+        const polls = await getJSON(K.polls(cid), []);
+        polls.push({ id: randomId(6), q, desc: cleanText(body.desc, 1500), opts, t: Date.now(), by: mid, closes, closed: 0, votes: {} });
+        await setJSON(K.polls(cid), polls.slice(-KEEP_POLLS));
+        return ok();
+      }
+      case 'poll-vote': {
+        const polls = await loadPolls(cid, com);
+        const p = polls.find((x) => x.id === body.id);
+        if (!p) return bad('gone', 404);
+        if (p.closed) return bad('closed', 409);
+        const opt = Number(body.opt);
+        if (!Number.isInteger(opt) || opt < 0 || opt >= p.opts.length) return bad();
+        p.votes = p.votes || {};
+        p.votes[mid] = opt; // un voto por vivienda; se puede cambiar mientras esté abierta
+        await setJSON(K.polls(cid), polls);
+        return ok();
+      }
+      case 'poll-close':
+      case 'poll-del': {
+        if (!admin) return needAdmin();
+        const polls = await loadPolls(cid, com);
+        const i = polls.findIndex((x) => x.id === body.id);
+        if (i < 0) return bad('gone', 404);
+        if (action === 'poll-del') polls.splice(i, 1);
+        else if (!polls[i].closed) await closePoll(cid, com, polls[i], mid);
+        await setJSON(K.polls(cid), polls);
+        return ok();
+      }
+
+      // ----- Viviendas y códigos (cargos) -----
+      case 'units-add': {
+        if (!admin) return needAdmin();
+        const labels = [...new Set((Array.isArray(body.labels) ? body.labels : []).map(cleanLabel).filter(Boolean))];
+        if (!labels.length || labels.length > 100) return bad();
+        const existing = Object.values(com.units).map((u) => u.label);
+        const fresh = labels.filter((l) => !existing.some((e) => sameLabel(e, l)));
+        if (Object.keys(com.units).length + fresh.length > MAX_UNITS) return bad('too-many-units', 409);
+        const codes = [];
+        for (const label of fresh) {
+          const m = newUnit(com, label);
+          codes.push({ mid: m, label, code: await issueCode(cid, com, m) });
+        }
+        // al dar de alta una vivienda que había pedido su código, la solicitud se da por atendida
+        const reqs = await getJSON(K.req(cid), []);
+        const left = reqs.filter((r) => !labels.some((l) => sameLabel(l, r.label)));
+        await saveCom();
+        if (left.length !== reqs.length) await setJSON(K.req(cid), left);
+        return ok({ codes, skipped: labels.length - fresh.length });
+      }
+      case 'unit-code': {
+        if (!admin) return needAdmin();
+        if (!com.units[body.mid]) return bad('gone', 404);
+        const code = await issueCode(cid, com, body.mid);
+        await saveCom();
+        const reqs = await getJSON(K.req(cid), []);
+        const left = reqs.filter((r) => !sameLabel(r.label, com.units[body.mid].label));
+        if (left.length !== reqs.length) await setJSON(K.req(cid), left);
+        return ok({ code, label: com.units[body.mid].label });
+      }
+      case 'unit-del': {
+        if (!admin) return needAdmin();
+        const u = com.units[body.mid];
+        if (!u) return bad('gone', 404);
+        if (isAdmin(com, body.mid)) return bad('is-admin', 409);
+        delete com.units[body.mid];
+        await pipeline([['DEL', K.code(u.h)], ['DEL', K.dm(cid, body.mid)], ['HDEL', K.dmIndex(cid), body.mid]]);
+        await saveCom();
+        return ok();
+      }
+      case 'req-del': {
+        if (!admin) return needAdmin();
+        const reqs = await getJSON(K.req(cid), []);
+        await setJSON(K.req(cid), reqs.filter((r) => r.id !== body.id));
+        return ok();
+      }
+
+      // ----- Solo el presidente -----
+      case 'rename': {
+        if (role !== 'pres') return needAdmin();
+        const name = cleanText(body.name, MAX_NAME);
+        if (!name) return bad();
+        com.name = name;
+        await saveCom();
+        return ok({ name });
+      }
+      case 'handover': {
+        if (role !== 'pres') return needAdmin();
+        const pres = body.pres;
+        const vice = body.vice || '';
+        if (!com.units[pres] || (vice && (!com.units[vice] || vice === pres))) return bad();
+        const before = { pres: com.pres, vice: com.vice };
+        com.pres = pres;
+        com.vice = vice;
+        // los nuevos cargos no pueden quedar bloqueados en el chat
+        com.units[pres].blocked = false;
+        if (vice) com.units[vice].blocked = false;
+        await saveCom();
+        if (before.pres !== pres || before.vice !== vice) {
+          const text = `La presidencia de la comunidad pasa a la vivienda ${com.units[pres].label}${vice ? ` y la vicepresidencia a la vivienda ${com.units[vice].label}` : ''}. Gracias a quienes han ocupado los cargos hasta ahora.`;
+          await addPost(cid, { title: 'Nuevos cargos de la comunidad', text, by: mid, role: 'pres', kind: 'handover' });
+        }
+        return ok();
+      }
+      default:
+        return bad('unknown-action');
+    }
+  } catch (err) {
+    return res.status(500).json({ error: 'server', detail: String(err.message || err).slice(0, 200) });
+  }
+};

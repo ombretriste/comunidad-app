@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <title>Mi comunidad</title>
+  <meta name="description" content="Tablón de anuncios, chat, encuestas y contacto con la presidencia de tu comunidad de vecinos, sin datos personales." />
+  <meta name="theme-color" content="#070b14" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml" />
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Mi comunidad" />
+  <meta name="color-scheme" content="dark light" />
+  <link rel="stylesheet" href="styles.css" />
+  <script src="boot.js"></script>
+</head>
+<body>
+  <div id="app" class="app">
+    <header class="topbar">
+      <div class="brand-wrap">
+        <span class="logo-slot" data-logo="30"></span>
+        <span class="brand" id="brand">Mi comunidad</span>
+      </div>
+      <button id="menu-btn" class="icon-btn" aria-label="Más opciones" title="Más opciones" aria-haspopup="menu" aria-expanded="false">
+        <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><g fill="currentColor"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></g></svg>
+      </button>
+    </header>
+    <main id="home" aria-live="polite"></main>
+  </div>
+
+  <!-- Secciones (tablón, chat, encuestas…) a pantalla completa -->
+  <section id="view" class="view" hidden>
+    <header class="view-top">
+      <button class="icon-btn back-btn" id="view-back" type="button" aria-label="Volver">
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>
+      </button>
+      <div class="view-head"><b id="view-title"></b><small id="view-sub"></small></div>
+      <div class="view-actions" id="view-actions"></div>
+    </header>
+    <div class="view-body" id="view-body"></div>
+    <form class="composer" id="composer" autocomplete="off" hidden>
+      <textarea id="msg-input" rows="1" placeholder="Escribe un mensaje" aria-label="Mensaje" maxlength="2000"></textarea>
+      <button class="send-btn" id="send-btn" type="submit" aria-label="Enviar" disabled>
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h13M12.5 6l6 6-6 6"/></svg>
+      </button>
+    </form>
+    <p class="composer-note" id="composer-note" hidden></p>
+  </section>
+
+  <div class="rotate-hint" aria-hidden="true">
+    <svg viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="2.5" width="10" height="19" rx="2"/><path d="M11 18.5h2"/></svg>
+    <p>Gira el móvil a vertical</p>
+  </div>
+
+  <div id="menu" class="menu" role="menu" hidden></div>
+  <div id="print" class="print-area" aria-hidden="true"></div>
+
+  <!-- Vercel Web Analytics (sin cookies): se configura en boot.js -->
+  <script defer src="/_vercel/insights/script.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
