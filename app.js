@@ -1,7 +1,7 @@
 'use strict';
 
 // Versión de la app (se ve en Información). Arreglos y ajustes: 0.x.y; novedades: 0.x.0.
-const APP_VERSION = '0.6.0';
+const APP_VERSION = '0.7.0';
 const APP_NAME = 'Mi comunidad';
 // Uso de la app en Vercel Analytics: cada sección cuenta como una página virtual (nunca datos).
 const track = (path) => { try { window.va?.('pageview', { path }); } catch (_) { /* sin analítica */ } };
@@ -2752,13 +2752,49 @@ function openDocsSheet() {
     <div class="sheet-head"><h2 class="sheet-title">Documentos</h2>
       <button class="icon-btn sm" type="button" data-close aria-label="Cerrar">${icon('close', 18)}</button></div>
     <p class="small muted">Elige un modelo, rellena los datos que necesites (los que dejes en blanco no aparecen) y crea el PDF o publícalo en el tablón con el PDF adjunto.${comIcon ? '' : ' Para que salga el icono de la comunidad, añádelo en Gestión.'}</p>
-    <div class="rows">${TEMPLATES.map((t) => `
+    <div class="rows">
+      <button class="row" type="button" data-cards>
+        <span class="tile-ico">${icon('key', 20)}</span>
+        <span class="row-main"><span class="row-top"><b class="wrap-b">Tarjetas con los códigos de todas las viviendas</b></span><span class="row-sub wrap">Cuatro por página, para recortar y dejar en cada buzón.</span></span>
+      </button>${TEMPLATES.map((t) => `
       <button class="row" type="button" data-tpl="${t.id}">
         <span class="tile-ico">${icon(t.icon, 20)}</span>
         <span class="row-main"><span class="row-top"><b class="wrap-b">${esc(t.name)}</b></span><span class="row-sub wrap">${esc(t.desc)}</span></span>
       </button>`).join('')}</div>`;
   sheet.querySelector('[data-close]').addEventListener('click', closeSheet);
   sheet.querySelectorAll('[data-tpl]').forEach((b) => b.addEventListener('click', () => openDocEditor(TEMPLATES.find((t) => t.id === b.dataset.tpl))));
+  sheet.querySelector('[data-cards]').addEventListener('click', openAllCards);
+}
+// Tarjetas de todas las viviendas. Los códigos se guardan desde la 0.7.0; las viviendas dadas de alta
+// antes no tienen el suyo guardado y, para incluirlas, hay que generarles uno nuevo.
+function openAllCards() {
+  const units = st.units || [];
+  const missing = units.filter((u) => !u.hasCode);
+  const sheet = openSheet('Tarjetas de códigos');
+  sheet.innerHTML = `
+    <div class="sheet-head"><h2 class="sheet-title">Tarjetas de códigos</h2>
+      <button class="icon-btn sm" type="button" data-close aria-label="Cerrar">${icon('close', 18)}</button></div>
+    <p class="small">Se crea un PDF con la tarjeta de cada vivienda y local (${units.length}), cuatro por página, para recortar y dejar en los buzones.</p>
+    ${missing.length ? `
+    <p class="note banner">${icon('info', 16)} <span>${plural(missing.length, 'vivienda no tiene', 'viviendas no tienen')} su código guardado porque se dio de alta antes de esta versión: ${esc(missing.slice(0, 12).map((u) => u.label).join(', '))}${missing.length > 12 ? '…' : ''}.</span></p>
+    <label class="check-row"><input type="checkbox" id="ac-renew" /> <span>Generar un código nuevo para ${missing.length === 1 ? 'ella' : 'ellas'} e incluir${missing.length === 1 ? 'la' : 'las'}. Sus códigos actuales dejarán de funcionar y tendrán que entrar con el de la tarjeta nueva.</span></label>` : ''}
+    <p class="form-error" id="ac-err" role="alert"></p>
+    <div class="editor-actions"><span></span><button class="done-btn" type="button" id="ac-ok">${icon('pdf', 18, 1.6)} Crear PDF</button></div>`;
+  sheet.querySelector('[data-close]').addEventListener('click', closeSheet);
+  sheet.querySelector('#ac-ok').addEventListener('click', async () => {
+    const ok = sheet.querySelector('#ac-ok');
+    const renew = !!sheet.querySelector('#ac-renew')?.checked;
+    ok.disabled = true;
+    try {
+      const { codes } = await call('codes', { renew, device: pushPref.device });
+      const mine = codes.find((c) => c.mid === st.me.mid);
+      if (mine && renew && missing.some((u) => u.mid === st.me.mid)) { sess.code = mine.code; persist(); } // este móvil sigue dentro
+      if (!codes.length) { sheet.querySelector('#ac-err').textContent = 'Ninguna vivienda tiene su código guardado. Marca la casilla para generarlos.'; ok.disabled = false; return; }
+      if (renew) refresh();
+      track('/tarjetas-todas');
+      await openPdfViewer(cardsDoc(codes), `codigos-${slugify(st.community.name) || 'comunidad'}.pdf`);
+    } catch (e) { sheet.querySelector('#ac-err').textContent = errorText(e); ok.disabled = false; }
+  });
 }
 function openDocEditor(tpl) {
   const saved = (load(DOCS_KEY, {}) || {})[tpl.id] || {};

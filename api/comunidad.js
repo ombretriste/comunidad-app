@@ -2,8 +2,9 @@
 // presidencia y encuestas de una comunidad de vecinos).
 //
 // Nadie da datos personales. Cada vivienda tiene un código propio que el presidente imprime y deja en
-// su buzón; con ese código se entra en la app. El servidor solo guarda el resumen SHA-256 del código,
-// así que tampoco lo puede leer: si un vecino lo pierde, se genera uno nuevo y el viejo deja de valer.
+// su buzón; con ese código se entra en la app. Para entrar se compara el resumen SHA-256 del código;
+// desde la 0.7.0 el código también se guarda en la comunidad para que los cargos puedan volver a
+// imprimir las tarjetas (las viviendas dadas de alta antes no lo tienen: hay que generarles uno nuevo).
 // Los permisos (publicar en el tablón, moderar el chat, encuestas, viviendas) se comprueban AQUÍ,
 // según el cargo de la vivienda que llama: presidente ('pres') o vicepresidente ('vice').
 //
@@ -29,6 +30,8 @@
 //   POST { action: 'units-add', code, labels }            -> { codes: [{ mid, label, code }] }   (solo cargos)
 //   POST { action: 'unit-code' | 'unit-del' | 'req-del', code, … }        (solo cargos)
 //   POST { action: 'unit-rename', code, mid, label }      (solo cargos: cambia el nombre de la vivienda o local)
+//   POST { action: 'codes', code, renew?, device? }       -> { codes: [{ mid, label, code }] }   (cargos: códigos de todas las
+//                                                            viviendas para las tarjetas; renew: genera uno a las que no lo tienen guardado)
 //   POST { action: 'rename', code, name }                 (cargos)
 //   POST { action: 'handover', code, pres, vice }         (cargos: nuevos presidente y vicepresidente)
 //   POST { action: 'icon-set', code, data }              (cargos: icono de la comunidad, JPEG en data URL; '' lo quita)
@@ -291,6 +294,7 @@ async function issueCode(cid, com, mid) {
   const h = await codeHash(code);
   const old = com.units[mid].h;
   com.units[mid].h = h;
+  com.units[mid].c = fmtCode(code); // solo lo ven los cargos, para volver a imprimir las tarjetas
   com.units[mid].issued = Date.now();
   const cmds = [['SET', K.code(h), `${cid}:${mid}`]];
   if (old) cmds.push(['DEL', K.code(old)]);
@@ -503,7 +507,7 @@ module.exports = async (req, res) => {
         if (admin) {
           out.threads = Object.entries(idx).filter(([m]) => com.units[m]).map(([m, v]) => ({ mid: m, label: unitName(com, m), ...v })).sort((a, b) => b.t - a.t);
           out.requests = reqs.slice().reverse();
-          out.units = Object.entries(com.units).map(([m, u]) => ({ mid: m, label: u.label, role: roleOf(com, m), blocked: !!u.blocked, issued: u.issued || 0, seen: u.seen || 0 }))
+          out.units = Object.entries(com.units).map(([m, u]) => ({ mid: m, label: u.label, role: roleOf(com, m), blocked: !!u.blocked, issued: u.issued || 0, seen: u.seen || 0, hasCode: !!u.c }))
             .sort((a, b) => a.label.localeCompare(b.label, 'es', { numeric: true }));
         }
         return res.status(200).json(out);
@@ -761,6 +765,20 @@ module.exports = async (req, res) => {
         await saveCom();
         if (left.length !== reqs.length) await setJSON(K.req(cid), left);
         return ok({ codes, skipped: labels.length - fresh.length });
+      }
+      case 'codes': {
+        if (!admin) return needAdmin();
+        if (body.renew) {
+          for (const [m, u] of Object.entries(com.units)) {
+            if (u.c) continue;
+            await issueCode(cid, com, m);
+            await dropUnitDevices(cid, m, m === mid ? body.device : '');
+          }
+          await saveCom();
+        }
+        const codes = Object.entries(com.units).filter(([, u]) => u.c).map(([m, u]) => ({ mid: m, label: u.label, code: u.c }))
+          .sort((a, b) => a.label.localeCompare(b.label, 'es', { numeric: true }));
+        return res.status(200).json({ codes, missing: Object.values(com.units).filter((u) => !u.c).length });
       }
       case 'unit-code': {
         if (!admin) return needAdmin();
