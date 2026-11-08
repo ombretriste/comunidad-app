@@ -1,7 +1,7 @@
 'use strict';
 
 // Versión de la app (se ve en Información). Arreglos y ajustes: 0.x.y; novedades: 0.x.0.
-const APP_VERSION = '0.8.1';
+const APP_VERSION = '0.9.0';
 const APP_NAME = 'Mi comunidad';
 // Uso de la app en Vercel Analytics: cada sección cuenta como una página virtual (nunca datos).
 const track = (path) => { try { window.va?.('pageview', { path }); } catch (_) { /* sin analítica */ } };
@@ -621,7 +621,8 @@ function renderBoard(body) {
     const f = st.board.find((p) => p.id === pid)?.files?.[i];
     if (!f || b.classList.contains('loading')) return;
     b.classList.add('loading');
-    try { await deliverFile(await fetchFile(f), f.name, f.type); } catch (e) { toast(errorText(e)); } finally { b.classList.remove('loading'); }
+    openFileViewer(f); // se ve dentro de la app; desde el visor se comparte o descarga
+    b.classList.remove('loading');
   }));
   body.querySelectorAll('[data-del]').forEach((b) => b.addEventListener('click', () => confirmSheet({
     title: '¿Eliminar este anuncio?', text: 'Desaparecerá del tablón para todos los vecinos.', ok: 'Eliminar', danger: true,
@@ -2610,6 +2611,106 @@ async function openPdfViewer(pdf, name) {
   el.querySelector('[data-close]').addEventListener('click', close);
   el.querySelector('[data-zoom]').addEventListener('click', () => { zoom = zoom > 1 ? 1 : 2; draw(); });
   el.querySelector('[data-share]').addEventListener('click', () => deliverFile(bytes, name, 'application/pdf'));
+}
+
+// ----- Visor de los archivos del tablón (como en DocCTRL) -----
+// PDF página a página con pdf.js (el iPhone solo enseña la primera página de un PDF incrustado),
+// imágenes y textos. Los demás tipos se comparten o descargan para abrirlos con otra app.
+const PDFJS_SRC = 'vendor/pdf.min.js'; // pdf.js 3.11.174 (Apache 2.0), se carga solo al abrir un PDF
+const PDFJS_WORKER = 'vendor/pdf.worker.min.js';
+const MAX_PDF_PAGES = 60;
+const loadScript = (src) => new Promise((resolve, reject) => {
+  const el = document.createElement('script');
+  el.src = src;
+  el.onload = resolve;
+  el.onerror = reject;
+  document.head.append(el);
+});
+async function loadPdfjs() {
+  if (!window.pdfjsLib) await loadScript(PDFJS_SRC);
+  window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_WORKER;
+  return window.pdfjsLib;
+}
+const isPdfFile = (f) => /pdf/i.test(f.type) || /\.pdf$/i.test(f.name);
+const isImageFile = (f) => /^image\//i.test(f.type) || /\.(jpe?g|png|gif|webp|heic)$/i.test(f.name);
+const isTextFile = (f) => /^text\//i.test(f.type) || /\.(txt|csv|md)$/i.test(f.name);
+async function openFileViewer(f) {
+  track('/visor-archivo');
+  closeSheet();
+  document.querySelector('.pdf-viewer')?.remove();
+  const el = document.createElement('section');
+  el.className = 'pdf-viewer';
+  el.setAttribute('aria-label', 'Archivo');
+  el.innerHTML = `
+    <header class="view-top">
+      <button class="icon-btn back-btn" type="button" data-close aria-label="Cerrar">${icon('close', 20, 1.6)}</button>
+      <div class="view-head"><b>${esc(f.name)}</b><small>${fmtSize(f.size)}</small></div>
+      <div class="view-actions">
+        <button class="icon-btn sm" type="button" data-zoom aria-label="Ampliar" hidden>${icon('zoom', 18)}</button>
+        <button class="icon-btn sm" type="button" data-share aria-label="Compartir, guardar o imprimir" disabled>${icon('share', 18)}</button>
+      </div>
+    </header>
+    <div class="pdf-pages"><p class="v-msg">Cargando…</p></div>`;
+  document.body.append(el);
+  document.body.classList.add('in-pdf');
+  const pages = el.querySelector('.pdf-pages');
+  const msg = (t) => { pages.innerHTML = `<p class="v-msg">${esc(t)}</p>`; };
+  let alive = true;
+  let bytes = null;
+  let pdf = null;
+  let zoom = 1;
+  const close = () => { alive = false; el.remove(); document.body.classList.remove('in-pdf'); window.removeEventListener('resize', onResize); };
+  el.querySelector('[data-close]').addEventListener('click', close);
+  el.querySelector('[data-share]').addEventListener('click', () => { if (bytes) deliverFile(bytes, f.name, f.type); });
+  const drawPdf = async () => {
+    const turn = (drawPdf.turn = (drawPdf.turn || 0) + 1);
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const cssW = Math.min(820, pages.clientWidth - 24) * zoom;
+    pages.classList.toggle('zoomed', zoom > 1);
+    pages.innerHTML = '';
+    for (let n = 1; n <= Math.min(pdf.numPages, MAX_PDF_PAGES) && alive && turn === drawPdf.turn; n++) {
+      const page = await pdf.getPage(n);
+      const viewport = page.getViewport({ scale: (cssW * dpr) / page.getViewport({ scale: 1 }).width });
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.round(viewport.width);
+      canvas.height = Math.round(viewport.height);
+      canvas.style.width = `${cssW}px`;
+      canvas.style.height = `${viewport.height / dpr}px`;
+      pages.append(canvas);
+      await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+    }
+    if (pdf.numPages > MAX_PDF_PAGES && turn === drawPdf.turn) pages.insertAdjacentHTML('beforeend', `<p class="v-msg">Se muestran las primeras ${MAX_PDF_PAGES} páginas de ${pdf.numPages}. Para ver el resto, compártelo o descárgalo.</p>`);
+  };
+  let resizeTimer = 0;
+  const onResize = () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => { if (pdf && alive) drawPdf(); }, 250); };
+  window.addEventListener('resize', onResize);
+  el.querySelector('[data-zoom]').addEventListener('click', () => { zoom = zoom > 1 ? 1 : 2; drawPdf(); });
+  try { bytes = await fetchFile(f); } catch (e) { if (alive) msg(errorText(e)); return; }
+  if (!alive) return;
+  el.querySelector('[data-share]').disabled = false;
+  if (isPdfFile(f)) {
+    try {
+      // isEvalSupported: false porque la política de seguridad (CSP) no permite eval
+      pdf = await (await loadPdfjs()).getDocument({ data: bytes.slice(), isEvalSupported: false }).promise;
+      if (!alive) return;
+      el.querySelector('.view-head small').textContent = `${plural(pdf.numPages, 'página', 'páginas')} · ${fmtSize(f.size)}`;
+      el.querySelector('[data-zoom]').hidden = false;
+      await drawPdf();
+    } catch (err) {
+      if (alive) msg('No se ha podido mostrar este PDF aquí (¿tiene contraseña?). Pulsa compartir para abrirlo con otra app.');
+    }
+  } else if (isImageFile(f)) {
+    const url = URL.createObjectURL(new Blob([bytes], { type: f.type || 'image/jpeg' }));
+    pages.innerHTML = '<img class="v-img" alt="">';
+    const img = pages.firstElementChild;
+    img.onerror = () => { if (alive) msg('Esta imagen no se puede ver aquí. Pulsa compartir para abrirla con otra app.'); };
+    img.src = url;
+  } else if (isTextFile(f) && bytes.length < 500000) {
+    pages.innerHTML = '<pre class="v-text"></pre>';
+    pages.firstElementChild.textContent = new TextDecoder().decode(bytes);
+  } else {
+    msg('Este tipo de archivo no se puede ver dentro de la app. Pulsa compartir para abrirlo, guardarlo o enviarlo.');
+  }
 }
 
 // ----- Plantillas de documentos (parte fija + datos opcionales) -----
