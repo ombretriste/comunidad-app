@@ -1,5 +1,5 @@
 // Cambia la versión al modificar archivos para que los móviles descarguen la nueva versión
-const CACHE = 'micomunidad-v14';
+const CACHE = 'micomunidad-v15';
 const ASSETS = [
   './',
   'index.html',
@@ -76,7 +76,7 @@ async function handlePush() {
   const byTag = new Map();
   notes.forEach((n) => { byTag.delete(n.tag || n.t); byTag.set(n.tag || n.t, n); });
   for (const n of [...byTag.values()].slice(-4)) {
-    await self.registration.showNotification(n.title || name, { ...opts, body: n.body, tag: n.tag || undefined, renotify: !!n.tag, timestamp: n.t, requireInteraction: /^call-/.test(n.tag || ''), data: { go: n.go || '' } });
+    await self.registration.showNotification(n.title || name, { ...opts, body: n.body, tag: n.tag || undefined, renotify: !!n.tag, timestamp: n.t, requireInteraction: /^(call|gc)-/.test(n.tag || ''), data: { go: n.go || '' } });
   }
 }
 self.addEventListener('push', (event) => event.waitUntil(handlePush()));

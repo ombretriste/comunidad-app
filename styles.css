@@ -648,3 +648,43 @@ body.in-pdf { overflow: hidden; }
 .call-ok { background: #2f9e44; }
 .call-btns .call-opt { background: color-mix(in srgb, var(--text) 14%, transparent); color: var(--text); }
 .call-btns .call-opt.on { background: var(--text); color: var(--bg); }
+
+/* ---------- Adjuntos en mensajes ---------- */
+.attach-btn { flex: 0 0 44px; width: 44px; height: 44px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--muted); }
+.attach-btn:active { background: var(--surface-2); }
+.atts { display: flex; flex-direction: column; gap: 6px; margin: 2px 0 4px; min-width: 0; }
+.att-img { display: block; padding: 0; border: 0; border-radius: 12px; overflow: hidden; background: rgba(0, 0, 0, .15); max-width: min(260px, 62vw); min-height: 80px; }
+.att-img img { display: block; width: 100%; height: auto; max-height: 320px; object-fit: cover; }
+.att-img.broken { min-height: 40px; }
+.msg.me .file-chip { background: rgba(255, 255, 255, .14); border-color: rgba(255, 255, 255, .22); color: #fff; }
+.msg.me .file-chip > svg, .msg.me .file-chip small { color: rgba(255, 255, 255, .85); }
+.bubble .file-chip { width: min(260px, 62vw); }
+.att-preview { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 8px; }
+.att-preview img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 12px; }
+.att-preview .file-chip { grid-column: 1 / -1; }
+
+/* ---------- Llamada en grupo ---------- */
+.gc-banner { display: flex; align-items: center; gap: 10px; margin: 6px 0; padding: 10px 12px; border-radius: 14px; border: 1px solid color-mix(in srgb, var(--ok) 50%, var(--line)); background: color-mix(in srgb, var(--ok) 12%, var(--surface)); }
+.gc-banner > svg { color: var(--ok); flex: 0 0 auto; }
+.gc-banner span { flex: 1; font-size: 14px; }
+.sm-done { padding: 8px 16px; }
+.gcall { position: fixed; inset: 0; z-index: 85; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; background: #05080f; color: #fff; padding: env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left); }
+.gc-top { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 10px 16px 6px; text-align: center; }
+.gc-top b { font-size: 16px; font-weight: 500; }
+.gc-top small { font-size: 12.5px; color: #a8b6cc; font-variant-numeric: tabular-nums; }
+.gc-stage { min-height: 0; padding: 8px; display: grid; gap: 8px; grid-template-columns: repeat(var(--cols, 1), minmax(0, 1fr)); grid-auto-rows: minmax(0, 1fr); }
+.gtile { position: relative; min-width: 0; min-height: 0; border-radius: 16px; overflow: hidden; background: #111a2b; }
+.gtile video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; background: #111a2b; }
+.gtile.mirror video { transform: scaleX(-1); }
+.gtile.nocam video { visibility: hidden; }
+.gtile-avatar { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); display: none; place-items: center; min-width: 76px; height: 76px; padding: 0 12px; border-radius: 38px; background: var(--grad-strong); font-size: 20px; font-weight: 600; }
+.gtile.nocam .gtile-avatar { display: grid; }
+.gtile-name { position: absolute; left: 8px; bottom: 8px; max-width: calc(100% - 16px); display: inline-flex; align-items: center; gap: 5px; padding: 4px 9px; border-radius: 999px; background: rgba(5, 8, 15, .62); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gtile-name svg { flex: none; color: #fca5a5; }
+.gtile-wait { position: absolute; inset: 0; display: grid; place-items: center; padding: 10px; text-align: center; font-size: 13px; background: rgba(5, 8, 15, .55); }
+.gc-empty { grid-column: 1 / -1; align-self: center; margin: 0; text-align: center; color: #a8b6cc; font-size: 15px; }
+.gc-bar { display: flex; justify-content: center; gap: 14px; padding: 12px 16px calc(16px + env(safe-area-inset-bottom)); }
+.gc-round { width: 56px; height: 56px; display: grid; place-items: center; border: 1px solid rgba(255, 255, 255, .22); border-radius: 50%; background: rgba(255, 255, 255, .08); color: #fff; }
+.gc-round.off { background: #f1f5f9; color: #0b1730; border-color: transparent; }
+.gc-round.end { width: 68px; border-radius: 28px; background: #e5344f; border-color: transparent; }
+body.in-call { overflow: hidden; }

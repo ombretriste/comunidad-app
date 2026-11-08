@@ -1,7 +1,7 @@
 'use strict';
 
 // Versión de la app (se ve en Información). Arreglos y ajustes: 0.x.y; novedades: 0.x.0.
-const APP_VERSION = '0.9.0';
+const APP_VERSION = '0.10.0';
 const APP_NAME = 'Mi comunidad';
 // Uso de la app en Vercel Analytics: cada sección cuenta como una página virtual (nunca datos).
 const track = (path) => { try { window.va?.('pageview', { path }); } catch (_) { /* sin analítica */ } };
@@ -185,6 +185,7 @@ function errorText(e) {
     past: 'La fecha de cierre debe ser futura.',
     gone: 'Ya no existe.',
     'not-configured': 'El servidor aún no tiene base de datos configurada.',
+    full: 'La llamada está llena (máximo 6 personas).',
     'too-many-rooms': 'Se ha llegado al máximo de chats.',
     'label-taken': 'Ya hay una vivienda o local con ese nombre.',
     'file-missing': 'Un archivo no terminó de subirse. Inténtalo de nuevo.',
@@ -517,6 +518,7 @@ async function refresh() {
     if (!sess.code) return;
     renderHome();
     if (view && ['board', 'polls', 'threads', 'admin', 'rooms'].includes(view.name)) renderView();
+    if (view?.name === 'chat' && curRoom && (roomById(curRoom.id)?.call || 0) !== curRoom.shownCall) { curRoom.shownCall = roomById(curRoom.id)?.call || 0; renderChat(); }
     checkRings();
     if (st && linkGo) { const g = linkGo; linkGo = ''; goTo(g); }
     if (st && !offline) setTimeout(maybeAskPush, 900);
@@ -739,6 +741,7 @@ function messagesHTML(list, intro = '') {
       <div class="msg ${m.mine ? 'me' : 'other'} ${grouped ? 'grouped' : ''} ${m.board ? 'board' : ''}" data-key="${esc(m.key)}">
         <div class="bubble ${m.deleted ? 'deleted' : ''}">
           ${!grouped && m.who ? `<span class="who">${esc(m.who)}${m.role ? ` <span class="role-chip">${ROLE_NAME[m.role]}</span>` : ''}</span>` : ''}
+          ${m.deleted ? '' : attachmentsHTML(m.files)}
           <span class="text">${m.deleted ? 'Mensaje eliminado por la presidencia' : linkify(m.text)}</span><span class="meta">${hhmm(m.t)}</span>
         </div>
       </div>`;
@@ -768,7 +771,7 @@ function renderRooms(body) {
         <span class="tile-ico">${icon(r.open ? (r.members ? 'users' : 'chat') : 'lock', 20)}</span>
         <span class="row-main">
           <span class="row-top"><b>${esc(r.name)}</b>${r.last.t ? `<small>${shortWhen(r.last.t)}</small>` : ''}</span>
-          <span class="row-sub">${r.open ? membersLabel(r) : 'Cerrado por la presidencia'}</span>
+          <span class="row-sub">${r.call ? `📞 Llamada en grupo en curso · ${plural(r.call, 'persona', 'personas')}` : r.open ? membersLabel(r) : 'Cerrado por la presidencia'}</span>
         </span>
         ${roomUnread(r) ? '<span class="badge">•</span>' : ''}
       </button>`).join('')}</div>`;
@@ -791,6 +794,10 @@ function startChat(id) {
   view.timer = setInterval(() => { if (document.visibilityState === 'visible') pollChat(); }, CHAT_EVERY_MS);
   composerState.send = async (text) => {
     await call('chat-send', { room: curRoom.id, text });
+    await pollChat(true);
+  };
+  composerState.attach = async (files, text) => {
+    await call('chat-send', { room: curRoom.id, text, files });
     await pollChat(true);
   };
   renderChat(true);
@@ -825,17 +832,23 @@ function renderChat(scroll) {
   const admin = isAdmin();
   const me = st.me;
   const general = !curRoom.members;
-  const intro = `<p class="note banner">${icon('users', 16)} <span>${general ? 'Chat de todas las viviendas.' : `Chat de ${membersLabel(curRoom).toLowerCase()}: solo lo veis quienes estáis en él.`} ${admin ? 'Toca un mensaje para borrarlo o bloquear a esa vivienda.' : 'La presidencia modera el chat.'}</span></p>`;
+  const live = roomById(curRoom.id)?.call || 0;
+  const intro = `<p class="note banner">${icon('users', 16)} <span>${general ? 'Chat de todas las viviendas.' : `Chat de ${membersLabel(curRoom).toLowerCase()}: solo lo veis quienes estáis en él.`} ${admin ? 'Toca un mensaje para borrarlo o bloquear a esa vivienda.' : 'La presidencia modera el chat.'}</span></p>`
+    + (live && gcall?.room !== curRoom.id ? `<div class="gc-banner">${icon('phone', 18)}<span>Llamada en grupo en curso · ${plural(live, 'persona', 'personas')}</span><button class="done-btn sm-done" type="button" data-gc-join>Unirse</button></div>` : '');
   body.innerHTML = chatMsgs.length || !curRoom.open
     ? messagesHTML(chatMsgs.map((m) => ({
-      key: m.s, t: m.t, mine: m.mid === me.mid, who: m.mid === me.mid ? '' : m.label, role: m.role, text: m.text, deleted: !!m.del, board: !!m.role,
+      key: m.s, t: m.t, mine: m.mid === me.mid, who: m.mid === me.mid ? '' : m.label, role: m.role, text: m.text, files: m.files, deleted: !!m.del, board: !!m.role,
     })), intro) + (!curRoom.open ? `<p class="sys">${icon('lock', 13)} La presidencia ha cerrado el chat</p>` : '')
     : `${intro}<div class="empty"><span class="tile-ico">${icon('chat', 28)}</span><h3>Aún no hay mensajes</h3><p>${general ? 'Saluda a tus vecinos.' : 'Escribe el primer mensaje.'}</p></div>`;
   if (stick) body.scrollTop = body.scrollHeight;
-  $('view-actions').innerHTML = admin
+  loadAttImages(body);
+  body.querySelector('[data-gc-join]')?.addEventListener('click', () => chooseGroupCall(curRoom.id));
+  const canGroup = canCall() && (!me.blocked || admin);
+  $('view-actions').innerHTML = (canGroup ? `<button class="icon-btn sm" type="button" id="chat-call" aria-label="Llamada en grupo" title="Llamada en grupo">${icon('video', 19)}</button>` : '') + (admin
     ? `<button class="icon-btn sm" type="button" id="chat-edit" aria-label="Editar el chat" title="Editar el chat">${icon('gear', 18)}</button>
        <button class="icon-btn sm" type="button" id="chat-lock" aria-label="${curRoom.open ? 'Cerrar el chat' : 'Abrir el chat'}" title="${curRoom.open ? 'Cerrar el chat' : 'Abrir el chat'}">${icon(curRoom.open ? 'unlock' : 'lock', 18)}</button>`
-    : '';
+    : '');
+  $('chat-call')?.addEventListener('click', () => chooseGroupCall(curRoom.id));
   $('chat-lock')?.addEventListener('click', toggleChatOpen);
   $('chat-edit')?.addEventListener('click', () => openRoomEditor(roomById(curRoom.id) || curRoom));
   const to = `Escribe en «${curRoom.name}»`;
@@ -1228,6 +1241,350 @@ $('call').addEventListener('click', () => {
   ['call-audio', 'call-remote'].forEach((id) => { if ($(id).srcObject) $(id).play().catch(() => {}); });
 });
 
+// ----- Adjuntos en chats y conversaciones -----
+// Fotos (se comprimen antes de subirlas) y archivos de hasta 10 MB. Se ven dentro de la app al tocarlos.
+const attIndex = new Map(); // fid -> datos del archivo (para el visor)
+const attUrls = new Map();  // fid -> URL de la foto ya descargada
+function attachmentsHTML(files) {
+  if (!files?.length) return '';
+  files.forEach((f) => attIndex.set(f.fid, f));
+  const imgs = files.filter(isImageFile);
+  const docs = files.filter((f) => !isImageFile(f));
+  return `<span class="atts">${imgs.map((f) => `<button class="att-img" type="button" data-att="${f.fid}" aria-label="Ver la foto"><img data-fid="${f.fid}" alt="" ${attUrls.has(f.fid) ? `src="${attUrls.get(f.fid)}"` : ''} /></button>`).join('')}${docs.map((f) => `<button class="file-chip" type="button" data-att="${f.fid}">${icon(/pdf/.test(f.type) ? 'pdf' : 'clip', 18)}<span><b>${esc(f.name)}</b><small>${fmtSize(f.size)}</small></span></button>`).join('')}</span>`;
+}
+// Descarga las fotos que se ven en pantalla (una vez; luego quedan en memoria)
+function loadAttImages(root) {
+  root.querySelectorAll('img[data-fid]:not([src])').forEach(async (img) => {
+    const f = attIndex.get(img.dataset.fid);
+    if (!f || img.dataset.loading) return;
+    img.dataset.loading = '1';
+    try {
+      if (!attUrls.has(f.fid)) attUrls.set(f.fid, URL.createObjectURL(new Blob([await fetchFile(f)], { type: f.type || 'image/jpeg' })));
+      img.src = attUrls.get(f.fid);
+    } catch (_) { img.closest('.att-img')?.classList.add('broken'); }
+  });
+}
+$('view-body').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-att]');
+  if (!b) return;
+  e.stopPropagation();
+  const f = attIndex.get(b.dataset.att);
+  if (f) openFileViewer(f);
+}, true);
+// Fotos: como mucho 1600 px y JPEG; así ocupan poco y se ven bien en el móvil
+function compressImage(file) {
+  return new Promise((resolve) => {
+    if (!/^image\/(jpeg|png|webp|heic|heif)$/i.test(file.type) && !/\.(jpe?g|png|webp|heic)$/i.test(file.name)) { resolve(null); return; }
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      const k = Math.min(1, 1600 / Math.max(img.naturalWidth, img.naturalHeight));
+      const c = document.createElement('canvas');
+      c.width = Math.round(img.naturalWidth * k);
+      c.height = Math.round(img.naturalHeight * k);
+      const g = c.getContext('2d');
+      g.fillStyle = '#fff';
+      g.fillRect(0, 0, c.width, c.height);
+      g.drawImage(img, 0, 0, c.width, c.height);
+      URL.revokeObjectURL(url);
+      c.toBlob(async (blob) => {
+        if (!blob) { resolve(null); return; }
+        resolve({ name: `${file.name.replace(/\.[^.]+$/, '') || 'foto'}.jpg`, type: 'image/jpeg', bytes: new Uint8Array(await blob.arrayBuffer()) });
+      }, 'image/jpeg', 0.82);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); resolve(null); };
+    img.src = url;
+  });
+}
+$('attach-btn').addEventListener('click', () => $('attach-input').click());
+$('attach-input').addEventListener('change', () => {
+  const list = [...$('attach-input').files];
+  $('attach-input').value = '';
+  if (list.length) openAttachSheet(list);
+});
+function openAttachSheet(list) {
+  const files = list.slice(0, 5);
+  const big = files.filter((f) => f.size > MAX_FILE_BYTES && !/^image\//.test(f.type));
+  const sheet = openSheet('Enviar archivos');
+  const previews = files.map((f) => (/^image\//.test(f.type) ? URL.createObjectURL(f) : ''));
+  sheet.innerHTML = `
+    <div class="sheet-head"><h2 class="sheet-title">${files.length === 1 ? 'Enviar' : `Enviar ${files.length}`}</h2>
+      <button class="icon-btn sm" type="button" data-close aria-label="Cerrar">${icon('close', 18)}</button></div>
+    <div class="att-preview">${files.map((f, i) => (previews[i] ? `<img src="${previews[i]}" alt="" />` : `<div class="file-chip">${icon(/pdf/i.test(f.type) ? 'pdf' : 'clip', 18)}<span><b>${esc(f.name)}</b><small>${fmtSize(f.size)}</small></span></div>`)).join('')}</div>
+    ${list.length > 5 ? '<p class="small muted">Se envían los 5 primeros.</p>' : ''}
+    ${big.length ? `<p class="form-error">${esc(big.map((f) => f.name).join(', '))}: más de 10 MB, no se puede enviar.</p>` : ''}
+    <input class="title-input" id="att-text" maxlength="2000" placeholder="Añade un mensaje (opcional)" autocomplete="off" />
+    <p class="form-error" id="att-err" role="alert"></p>
+    <div class="editor-actions"><span></span><button class="done-btn" type="button" id="att-ok" ${big.length === files.length ? 'disabled' : ''}>${icon('send', 18, 1.7)} Enviar</button></div>`;
+  const cleanup = () => previews.forEach((u) => u && URL.revokeObjectURL(u));
+  sheet.querySelector('[data-close]').addEventListener('click', () => { cleanup(); closeSheet(); });
+  sheet.querySelector('#att-ok').addEventListener('click', async () => {
+    const ok = sheet.querySelector('#att-ok');
+    ok.disabled = true;
+    try {
+      const metas = [];
+      const sendable = files.filter((f) => !big.includes(f));
+      for (const [i, f] of sendable.entries()) {
+        ok.textContent = `Subiendo ${i + 1} de ${sendable.length}…`;
+        const small = /^image\//.test(f.type) ? await compressImage(f) : null;
+        const bytes = small ? small.bytes : new Uint8Array(await f.arrayBuffer());
+        if (bytes.length > MAX_FILE_BYTES) continue;
+        metas.push(await uploadFile(small ? small.name : f.name, small ? small.type : f.type, bytes));
+      }
+      if (!metas.length) throw Object.assign(new Error('x'), { code: 'file-missing' });
+      ok.textContent = 'Enviando…';
+      await composerState.attach(metas, sheet.querySelector('#att-text').value.trim());
+      cleanup();
+      closeSheet();
+    } catch (e) {
+      sheet.querySelector('#att-err').textContent = errorText(e);
+      ok.disabled = false;
+      ok.innerHTML = `${icon('send', 18, 1.7)} Enviar`;
+    }
+  });
+}
+
+// ----- Llamadas de grupo en los chats (como en MeetCTRL) -----
+// Cada participante se conecta directamente con cada uno de los demás (hasta 6). Cada conexión lleva
+// voz y cámara, y un canal de datos para avisar si el micrófono o la cámara están encendidos.
+const GC_BUSY_MS = 1000;
+const GC_IDLE_MS = 2500;
+const GC_RETRIES = 2;
+let gcall = null;  // { room, name, pid, ice, peers: Map, listed: Set, info: Map, started, timer }
+const gLocal = { mic: true, cam: false, facing: 'user', micTrack: null, camTrack: null };
+const isTouchDev = matchMedia('(pointer: coarse)').matches;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+function chooseGroupCall(roomId) {
+  const r = roomById(roomId);
+  if (!r) return;
+  if (!canCall()) { toast('Este navegador no permite llamadas'); return; }
+  const live = r.call > 0;
+  const s = openCenter(`
+    <span class="big-ico-sm">${icon('users', 30, 1.4)}</span>
+    <h2 class="sheet-title">${live ? 'Unirte a la llamada' : 'Llamada en grupo'}</h2>
+    <p class="small">${live ? `Hay ${plural(r.call, 'persona', 'personas')} en la llamada de «${esc(r.name)}».` : `Se avisará a los miembros de «${esc(r.name)}» para que se unan. Caben hasta 6 personas.`}</p>
+    <div class="center-actions"><button class="ghost-btn" type="button" data-voice>${icon('phone', 18)} Solo voz</button><button class="done-btn" type="button" data-video>${icon('video', 18)} Con vídeo</button></div>`);
+  s.querySelector('[data-voice]').addEventListener('click', () => { closeSheet(); joinGroupCall(roomId, false); });
+  s.querySelector('[data-video]').addEventListener('click', () => { closeSheet(); joinGroupCall(roomId, true); });
+}
+async function gGrab(video) {
+  const md = navigator.mediaDevices;
+  const want = async (c) => { try { return await md.getUserMedia(c); } catch (_) { return null; } };
+  const VIDEO = { width: { ideal: 960 }, height: { ideal: 540 }, frameRate: { ideal: 24 }, facingMode: gLocal.facing };
+  const stream = (video && await want({ audio: { echoCancellation: true, noiseSuppression: true }, video: VIDEO })) || await want({ audio: { echoCancellation: true, noiseSuppression: true } });
+  if (!stream) return false;
+  gLocal.micTrack = stream.getAudioTracks()[0] || null;
+  gLocal.camTrack = stream.getVideoTracks()[0] || null;
+  gLocal.mic = true;
+  gLocal.cam = !!gLocal.camTrack;
+  return !!gLocal.micTrack;
+}
+function gDrop() { ['micTrack', 'camTrack'].forEach((k) => { gLocal[k]?.stop(); gLocal[k] = null; }); }
+async function joinGroupCall(roomId, video) {
+  if (gcall || callNow) { toast('Ya estás en una llamada'); return; }
+  const r = roomById(roomId);
+  unlockTone();
+  if (!(await gGrab(video))) { toast('Hace falta permiso para usar el micrófono'); return; }
+  const pid = randomHex(16);
+  try {
+    const { iceServers } = await call('ice').catch(() => ({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] }));
+    const { peers } = await call('gc-join', { room: roomId, pid, video });
+    gcall = { room: roomId, name: r?.name || 'Llamada', pid, ice: iceServers, peers: new Map(), listed: new Set(peers.map((p) => p.pid)), info: new Map(peers.map((p) => [p.pid, p])), started: 0 };
+  } catch (e) {
+    gDrop();
+    toast(e.code === 'full' ? 'La llamada está llena (máximo 6 personas)' : errorText(e));
+    return;
+  }
+  track(video ? '/videollamada-grupo' : '/llamada-grupo');
+  const g = gcall;
+  $('gcall').hidden = false;
+  document.body.classList.add('in-call');
+  for (const id of g.listed) gOffer(id);
+  gRender();
+  g.timer = setInterval(gStatus, 1000);
+  navigator.wakeLock?.request('screen').then((l) => { g.wake = l; }).catch(() => {});
+  gPollLoop(g);
+}
+async function leaveGroupCall() {
+  const g = gcall;
+  if (!g) return;
+  gcall = null;
+  clearInterval(g.timer);
+  for (const p of g.peers.values()) {
+    try { if (p.dc.readyState === 'open') p.dc.send(JSON.stringify({ bye: true })); } catch (_) { /* ya cerrado */ }
+    p.pc.close();
+  }
+  gDrop();
+  g.wake?.release().catch(() => {});
+  $('gcall').hidden = true;
+  $('gc-stage').replaceChildren();
+  document.body.classList.remove('in-call');
+  call('gc-leave', { room: g.room, pid: g.pid }).catch(() => {});
+  setTimeout(refresh, 400);
+}
+window.addEventListener('pagehide', () => {
+  if (gcall) navigator.sendBeacon?.(API, new Blob([JSON.stringify({ action: 'gc-leave', code: sess.code, room: gcall.room, pid: gcall.pid })], { type: 'application/json' }));
+});
+async function gPollLoop(g) {
+  while (gcall === g) {
+    try {
+      const { peers, inbox } = await call('gc-poll', { room: g.room, pid: g.pid });
+      if (gcall !== g) return;
+      g.listed = new Set(peers.map((p) => p.pid));
+      peers.forEach((p) => g.info.set(p.pid, p));
+      for (const m of inbox) await gOnSignal(g, m);
+      for (const p of [...g.peers.values()]) if (!g.listed.has(p.id) && p.dc.readyState !== 'open') gDropPeer(p);
+      gRender();
+    } catch (_) { /* sin conexión: se reintenta */ }
+    const allUp = g.peers.size > 0 && [...g.peers.values()].every((p) => p.state === 'up');
+    await sleep(allUp ? GC_IDLE_MS : GC_BUSY_MS);
+  }
+}
+function gNewPeer(id, offerer, tries = 0) {
+  const pc = new RTCPeerConnection({ iceServers: gcall.ice });
+  const dc = pc.createDataChannel('state', { negotiated: true, id: 0 });
+  const p = { id, pc, dc, offerer, tries, mic: true, cam: false, state: 'connecting', senders: [], stream: null };
+  gcall.peers.set(id, p);
+  dc.onopen = () => { gSendState(p); gRender(); };
+  dc.onmessage = (e) => {
+    let s;
+    try { s = JSON.parse(e.data); } catch (_) { return; }
+    if (s.bye) { gDropPeer(p); return; }
+    p.mic = !!s.mic;
+    p.cam = !!s.cam;
+    gRender();
+  };
+  pc.onconnectionstatechange = () => {
+    if (gcall?.peers.get(id) !== p) return;
+    const st2 = pc.connectionState;
+    if (st2 === 'connected') { p.state = 'up'; p.tries = 0; if (!gcall.started) gcall.started = Date.now(); }
+    else if (st2 === 'disconnected') p.state = 'connecting';
+    else if (st2 === 'failed') {
+      p.state = 'failed';
+      if (offerer && p.tries < GC_RETRIES && gcall.listed.has(id)) { const n = p.tries + 1; pc.close(); gOffer(id, n); } else if (!gcall.listed.has(id)) gDropPeer(p);
+    }
+    gRender();
+  };
+  return p;
+}
+function gBind(p) {
+  const [audio, cam] = p.pc.getTransceivers();
+  [audio, cam].forEach((t) => { t.direction = 'sendrecv'; });
+  p.senders = [audio.sender, cam.sender];
+  p.stream = new MediaStream([audio.receiver.track, cam.receiver.track]);
+  gSendTracks(p);
+}
+function gSendTracks(p) {
+  if (p.senders.length < 2) return;
+  const tracks = [gLocal.micTrack, gLocal.camTrack];
+  p.senders.forEach((s, i) => { if (s.track !== tracks[i]) s.replaceTrack(tracks[i]).catch(() => {}); });
+}
+const gState = () => ({ mic: gLocal.mic && !!gLocal.micTrack, cam: !!gLocal.camTrack });
+function gSendState(p) { if (p.dc.readyState === 'open') p.dc.send(JSON.stringify(gState())); }
+function gSyncAll() { if (!gcall) return; for (const p of gcall.peers.values()) { gSendTracks(p); gSendState(p); } gRender(); }
+async function gOffer(id, tries = 0) {
+  const g = gcall;
+  const p = gNewPeer(id, true, tries);
+  try {
+    p.pc.addTransceiver('audio', { direction: 'sendrecv' });
+    p.pc.addTransceiver('video', { direction: 'sendrecv' });
+    gBind(p);
+    await p.pc.setLocalDescription(await p.pc.createOffer());
+    await iceReady(p.pc);
+    if (gcall === g && g.peers.get(id) === p) await call('gc-send', { room: g.room, pid: g.pid, to: id, sig: { t: 'offer', sdp: p.pc.localDescription.sdp } });
+  } catch (_) { p.state = 'failed'; }
+  gRender();
+}
+async function gOnSignal(g, { from, sig }) {
+  let p = g.peers.get(from);
+  if (sig.t === 'offer') {
+    // Si dos se ofrecen a la vez, gana la oferta del identificador menor
+    if (p?.pc.signalingState === 'have-local-offer' && g.pid < from) return;
+    if (p) { p.pc.close(); g.peers.delete(from); }
+    p = gNewPeer(from, false);
+    try {
+      await p.pc.setRemoteDescription({ type: 'offer', sdp: sig.sdp });
+      gBind(p);
+      await p.pc.setLocalDescription(await p.pc.createAnswer());
+      await iceReady(p.pc);
+      await call('gc-send', { room: g.room, pid: g.pid, to: from, sig: { t: 'answer', sdp: p.pc.localDescription.sdp } });
+    } catch (_) { p.state = 'failed'; }
+  } else if (sig.t === 'answer' && p?.pc.signalingState === 'have-local-offer') {
+    await p.pc.setRemoteDescription({ type: 'answer', sdp: sig.sdp }).catch(() => { p.state = 'failed'; });
+  }
+  gRender();
+}
+function gDropPeer(p) {
+  if (gcall?.peers.get(p.id) !== p) return;
+  p.pc.close();
+  gcall.peers.delete(p.id);
+  gRender();
+}
+// Pantalla de la llamada de grupo: una casilla por persona (con su vivienda)
+function gTile({ name, role, stream, self, nocam, muted, wait }) {
+  const el = document.createElement('div');
+  el.className = `gtile${self ? ' self' : ''}${nocam ? ' nocam' : ''}${self && gLocal.facing === 'user' ? ' mirror' : ''}`;
+  const v = document.createElement('video');
+  v.autoplay = true;
+  v.playsInline = true;
+  v.setAttribute('playsinline', '');
+  v.muted = !!self;
+  el.append(v);
+  el.insertAdjacentHTML('beforeend', `<span class="gtile-avatar">${esc(name)}</span><span class="gtile-name">${muted ? icon('micOff', 14) : ''}${esc(name)}${role ? ` · ${ROLE_NAME[role]}` : ''}</span>${wait ? `<span class="gtile-wait">${wait}</span>` : ''}`);
+  if (stream) v.srcObject = stream;
+  return el;
+}
+function gRender() {
+  const g = gcall;
+  if (!g) return;
+  const tiles = [];
+  for (const p of g.peers.values()) {
+    const inf = g.info.get(p.id) || {};
+    tiles.push({ name: inf.label || 'Vecino', role: inf.role, stream: p.stream, nocam: !p.cam, muted: !p.mic, wait: p.state === 'up' ? '' : p.state === 'failed' ? 'No se ha podido conectar' : 'Conectando…' });
+  }
+  tiles.push({ name: st.me.label, role: st.me.role, stream: gLocal.camTrack ? new MediaStream([gLocal.camTrack]) : null, self: true, nocam: !gLocal.camTrack, muted: !(gLocal.mic && gLocal.micTrack) });
+  const stage = $('gc-stage');
+  stage.replaceChildren(...tiles.map(gTile));
+  const wide = innerWidth > innerHeight;
+  stage.style.setProperty('--cols', tiles.length <= 2 ? (wide ? 2 : 1) : tiles.length <= 4 ? 2 : (wide ? 3 : 2));
+  if (tiles.length === 1) stage.insertAdjacentHTML('beforeend', '<p class="gc-empty">Esperando a los demás… Se ha avisado a los miembros del chat.</p>');
+  stage.querySelectorAll('video').forEach((v) => { if (v.srcObject) v.play().catch(() => {}); });
+  gStatus();
+  const micOn = gLocal.mic && !!gLocal.micTrack;
+  $('gc-bar').innerHTML = `
+    <button class="gc-round ${micOn ? '' : 'off'}" data-g="mic" type="button" aria-label="${micOn ? 'Silenciar el micrófono' : 'Activar el micrófono'}">${icon(micOn ? 'mic' : 'micOff', 24, 1.5)}</button>
+    <button class="gc-round ${gLocal.camTrack ? '' : 'off'}" data-g="cam" type="button" aria-label="${gLocal.camTrack ? 'Apagar la cámara' : 'Encender la cámara'}">${icon(gLocal.camTrack ? 'video' : 'videoOff', 24, 1.5)}</button>
+    ${isTouchDev && gLocal.camTrack ? `<button class="gc-round" data-g="flip" type="button" aria-label="Cambiar de cámara">${icon('flip', 24, 1.5)}</button>` : ''}
+    <button class="gc-round end" data-g="end" type="button" aria-label="Salir de la llamada">${icon('hangup', 26, 1.5)}</button>`;
+}
+function gStatus() {
+  const g = gcall;
+  if (!g) return;
+  const up = [...g.peers.values()].filter((p) => p.state === 'up').length;
+  const time = g.started ? ` · ${fmtDur((Date.now() - g.started) / 1000)}` : '';
+  $('gc-title').textContent = g.name;
+  $('gc-status').textContent = up ? `${plural(up + 1, 'persona', 'personas')}${time}` : g.peers.size ? 'Conectando…' : 'Esperando a los demás';
+}
+$('gc-bar').addEventListener('click', async (e) => {
+  const a = e.target.closest('[data-g]')?.dataset.g;
+  if (!a) return;
+  if (a === 'end') return leaveGroupCall();
+  if (a === 'mic') { gLocal.mic = !(gLocal.mic && gLocal.micTrack); if (gLocal.micTrack) gLocal.micTrack.enabled = gLocal.mic; }
+  if (a === 'cam') {
+    if (gLocal.camTrack) { gLocal.camTrack.stop(); gLocal.camTrack = null; } else {
+      try { gLocal.camTrack = (await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 960 }, height: { ideal: 540 }, facingMode: gLocal.facing } })).getVideoTracks()[0]; } catch (_) { toast('No se puede usar la cámara: revisa los permisos'); }
+    }
+  }
+  if (a === 'flip') {
+    gLocal.facing = gLocal.facing === 'user' ? 'environment' : 'user';
+    gLocal.camTrack?.stop();
+    try { gLocal.camTrack = (await navigator.mediaDevices.getUserMedia({ video: { facingMode: gLocal.facing } })).getVideoTracks()[0]; } catch (_) { gLocal.camTrack = null; }
+  }
+  gSyncAll();
+});
+window.addEventListener('resize', () => { if (gcall) gRender(); });
+$('gcall').addEventListener('click', () => $('gc-stage').querySelectorAll('video').forEach((v) => { if (v.srcObject) v.play().catch(() => {}); }));
+
 // Conversación privada con la presidencia (vecino) o con una vivienda (cargos)
 let dmMsgs = [];
 function startDM(mid) {
@@ -1244,6 +1601,10 @@ function startDM(mid) {
   view.timer = setInterval(() => { if (document.visibilityState === 'visible') pollDM(false); }, DM_EVERY_MS);
   composerState.send = async (text) => {
     await call('dm-send', { text, mid: admin ? mid : undefined });
+    await pollDM(true);
+  };
+  composerState.attach = async (files, text) => {
+    await call('dm-send', { text, files, mid: admin ? mid : undefined });
     await pollDM(true);
   };
   showComposer(true, '', admin ? 'Responde a esta vivienda' : 'Escribe a la presidencia');
@@ -1284,11 +1645,12 @@ function renderDM(scroll) {
     let who = '';
     if (admin) who = fromBoard ? (m.by === me.mid ? '' : `${m.byLabel}`) : m.byLabel;
     else who = fromBoard ? 'Presidencia' : '';
-    return { key: m.id, t: m.t, mine, who, role: fromBoard && (admin ? m.by !== me.mid : true) ? m.byRole : '', text: m.text, board: fromBoard && !mine };
+    return { key: m.id, t: m.t, mine, who, role: fromBoard && (admin ? m.by !== me.mid : true) ? m.byRole : '', text: m.text, files: m.files, board: fromBoard && !mine };
   });
   body.innerHTML = list.length ? messagesHTML(list, intro)
     : `${intro}<div class="empty"><span class="tile-ico">${icon('mail', 28)}</span><h3>${admin ? 'Sin mensajes' : 'Escribe tu consulta'}</h3><p>${admin ? 'Escribe el primero a esta vivienda.' : 'Avisos, quejas o propuestas: llegarán al presidente y al vicepresidente.'}</p></div>`;
   if (stick) body.scrollTop = body.scrollHeight;
+  loadAttImages(body);
 }
 
 // ----- Conversaciones (cargos) -----

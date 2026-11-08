@@ -23,6 +23,10 @@
 //   POST { action: 'ice', code }                          -> { iceServers }   (STUN, y TURN si Vercel tiene las claves de Cloudflare)
 //   POST { action: 'call-send', code, mid?, device, sig } -> { s }   (sig: { k: ring|accept|reject|busy|offer|answer|end, cid, to?, sdp?, video? })
 //   POST { action: 'call-poll', code, mid?, after }       -> { signals }
+//   Llamadas de grupo en un chat (como MeetCTRL: cada móvil conectado con los demás, hasta 6):
+//   POST { action: 'gc-join' | 'gc-poll' | 'gc-leave', code, room, pid }  -> { peers: [{ pid, mid, label, role }], inbox? }
+//   POST { action: 'gc-send', code, room, pid, to, sig }  -> { ok }
+//   Adjuntos: chat-send y dm-send aceptan `files` (subidos antes con file-put, que puede usar cualquier vivienda).
 //   POST { action: 'dm-get', code, mid? }                 -> { msgs }   (vecino: su conversación; cargos: la de `mid`)
 //   POST { action: 'dm-send', code, text, mid? }          -> { ok }
 //   POST { action: 'poll-create' | 'poll-close' | 'poll-del', code, … }   (encuestas; solo cargos)
@@ -89,6 +93,11 @@ const MAX_FILES = 5;           // archivos por anuncio
 const UPLOAD_TTL_S = 86400;    // un archivo subido que no llega a publicarse se borra al día
 const MAX_ICON = 160000;       // icono de la comunidad (JPEG pequeño en base64)
 const MAX_ROOMS = 20;          // chats por comunidad
+const MSG_FILE_TTL_S = 180 * 86400; // los adjuntos de chats y conversaciones duran 6 meses
+const GC_MAX = 6;              // participantes en una llamada de grupo: cada uno envía a todos
+const GC_STALE_MS = 15000;     // sin noticias en 15 s, ese participante ya no está
+const GC_TTL_S = 60;
+const PID = /^[a-f0-9]{32}$/;
 const MAX_SIG = 60000;         // señal de llamada (descripción de la conexión; con vídeo es larga)
 const CALL_TTL_S = 120;        // las señales solo sirven mientras se conecta la llamada
 const CALL_RING_MS = 45e3;     // lo que suena una llamada sin contestar
@@ -161,7 +170,21 @@ const K = {
   calls: (cid, mid) => `vec:c:${cid}:call:${mid}`,
   callSeq: (cid, mid) => `vec:c:${cid}:callseq:${mid}`,
   rings: (cid) => `vec:c:${cid}:rings`,
+  gc: (cid, room) => `vec:c:${cid}:gc:${room}`,          // ZSET pid -> última vez visto
+  gcInfo: (cid, room) => `vec:c:${cid}:gci:${room}`,     // hash pid -> { mid }
+  gcBox: (cid, room, pid) => `vec:c:${cid}:gcq:${room}:${pid}`,
 };
+// Adjuntos de un mensaje: deben estar subidos; duran MSG_FILE_TTL_S
+async function attachFiles(cid, list) {
+  const files = cleanFiles(list);
+  if (!files.length) return [];
+  const keys = fileKeys(cid, files);
+  const exists = await pipeline(keys.map((k) => ['EXISTS', k]));
+  if (exists.some((e) => !Number(e))) throw Object.assign(new Error('file-missing'), { code: 'file-missing' });
+  await pipeline(keys.map((k) => ['EXPIRE', k, MSG_FILE_TTL_S]));
+  return files;
+}
+const filesNote = (files) => (files.every((f) => /^image\//.test(f.type)) ? `📷 ${files.length > 1 ? `${files.length} fotos` : 'Foto'}` : `📎 ${files.length > 1 ? `${files.length} archivos` : files[0].name}`);
 
 // Chats: no hay ninguno por defecto (desde la 0.8.0); los crean los cargos, para todas las viviendas
 // (members: null, también las que se den de alta después) o para algunas. El antiguo chat «general»
@@ -476,7 +499,7 @@ module.exports = async (req, res) => {
         const [board, polls, tails, dmIndex, reqs, ringsRaw] = await Promise.all([
           getJSON(K.board(cid), []),
           loadPolls(cid, com),
-          pipeline(rooms.map((r) => ['LRANGE', K.roomChat(cid, r.id), -1, -1])),
+          pipeline(rooms.flatMap((r) => [['LRANGE', K.roomChat(cid, r.id), -1, -1], ['ZCOUNT', K.gc(cid, r.id), Date.now() - GC_STALE_MS, '+inf']])),
           redis('HGETALL', K.dmIndex(cid)),
           admin ? getJSON(K.req(cid), []) : [],
           redis('HGETALL', K.rings(cid)),
@@ -497,8 +520,9 @@ module.exports = async (req, res) => {
           board: board.slice().reverse().map((p) => ({ ...p, byLabel: p.by ? unitName(com, p.by) : '' })),
           polls: polls.slice().reverse().map((p) => pollView(p, com, mid)),
           rooms: rooms.map((r, i) => {
-            const last = tails[i] && tails[i][0] ? JSON.parse(tails[i][0]) : null;
-            return { id: r.id, name: r.name, members: r.members ? r.members.filter((m) => com.units[m]) : null, open: r.open !== false, last: last ? { s: last.s, t: last.t, mine: last.mid === mid } : { s: 0, t: 0 } };
+            const tail = tails[i * 2];
+            const last = tail && tail[0] ? JSON.parse(tail[0]) : null;
+            return { id: r.id, name: r.name, members: r.members ? r.members.filter((m) => com.units[m]) : null, open: r.open !== false, last: last ? { s: last.s, t: last.t, mine: last.mid === mid } : { s: 0, t: 0 }, call: Number(tails[i * 2 + 1]) || 0 };
           }),
           rings,
           dm: idx[mid] || null,
@@ -551,7 +575,7 @@ module.exports = async (req, res) => {
         const after = Math.max(0, Number(body.after) || 0);
         const raw = await redis('LRANGE', K.roomChat(cid, room.id), after ? -KEEP_CHAT : -200, -1);
         const all = (raw || []).map((m) => JSON.parse(m));
-        const msgs = all.filter((m) => m.s > after).map((m) => ({ ...m, label: unitName(com, m.mid), role: roleOf(com, m.mid), text: m.del ? '' : m.text }));
+        const msgs = all.filter((m) => m.s > after).map((m) => ({ ...m, label: unitName(com, m.mid), role: roleOf(com, m.mid), text: m.del ? '' : m.text, files: m.del ? undefined : m.files }));
         // los mensajes borrados después se avisan aparte para quitarlos de la pantalla
         const dels = all.filter((m) => m.del && m.s <= after).map((m) => m.s);
         return res.status(200).json({ msgs, dels, open: room.open !== false, blocked: !!me.blocked, name: room.name, members: room.members });
@@ -560,16 +584,18 @@ module.exports = async (req, res) => {
         const room = roomOf(com, body.room);
         if (!canSee(com, room, mid)) return bad('gone', 404);
         const text = cleanText(body.text, MAX_TEXT);
-        if (!text) return bad();
+        if (!text && !(body.files || []).length) return bad();
         if (me.blocked) return bad('blocked', 403);
         if (room.open === false && !admin) return bad('closed', 403);
         if (await limited(`vec:rl:msg:${cid}:${mid}`, MSGS_PER_MIN, 60)) return bad('too-many', 429);
+        let files = [];
+        try { files = await attachFiles(cid, body.files); } catch (e) { return bad('file-missing', 409); }
         const s = await redis('INCR', K.roomSeq(cid, room.id));
-        const msg = { s, t: Date.now(), mid, text };
+        const msg = { s, t: Date.now(), mid, text, ...(files.length ? { files } : {}) };
         await pipeline([['RPUSH', K.roomChat(cid, room.id), JSON.stringify(msg)], ['LTRIM', K.roomChat(cid, room.id), -KEEP_CHAT, -1]]);
         await notify(cid, com, room.members || 'all', mid, {
           title: `${room.name} · ${com.name}`,
-          body: `${me.label}${role ? ` (${role === 'pres' ? 'Presidente' : 'Vicepresidente'})` : ''}: ${short(text)}`,
+          body: `${me.label}${role ? ` (${role === 'pres' ? 'Presidente' : 'Vicepresidente'})` : ''}: ${text ? short(text) : filesNote(files)}`,
           go: `chat:${room.id}`, tag: `chat-${room.id}`,
         });
         return ok({ s, t: msg.t });
@@ -583,10 +609,13 @@ module.exports = async (req, res) => {
         const i = (raw || []).findIndex((m) => JSON.parse(m).s === Number(body.s));
         if (i < 0) return bad('gone', 404);
         const m = JSON.parse(raw[i]);
+        const gone = fileKeys(cid, m.files);
         m.del = Date.now();
         m.delBy = mid;
         m.text = '';
+        delete m.files;
         await redis('LSET', key, i, JSON.stringify(m));
+        if (gone.length) await redis('DEL', ...gone);
         return ok();
       }
       case 'chat-open': {
@@ -630,6 +659,55 @@ module.exports = async (req, res) => {
         const [room] = com.rooms.splice(i, 1);
         await saveCom();
         await pipeline([['DEL', K.roomChat(cid, room.id)], ['DEL', K.roomSeq(cid, room.id)]]);
+        return ok();
+      }
+
+      // ----- Llamadas de grupo en un chat -----
+      case 'gc-join':
+      case 'gc-poll':
+      case 'gc-leave':
+      case 'gc-send': {
+        const room = roomOf(com, body.room);
+        if (!canSee(com, room, mid)) return bad('gone', 404);
+        if (!PID.test(body.pid || '')) return bad();
+        const now = Date.now();
+        const z = K.gc(cid, room.id);
+        const info = K.gcInfo(cid, room.id);
+        const peersOf = async (list) => {
+          const others = (list || []).filter((p) => p !== body.pid);
+          const meta = others.length ? await pipeline(others.map((p) => ['HGET', info, p])) : [];
+          return others.map((p, i) => {
+            const m = meta[i] ? JSON.parse(meta[i]) : {};
+            return { pid: p, mid: m.mid || '', label: m.mid ? unitName(com, m.mid) : '', role: m.mid ? roleOf(com, m.mid) : '' };
+          });
+        };
+        if (action === 'gc-join') {
+          if (me.blocked && !admin) return bad('blocked', 403);
+          const [, list] = await pipeline([['ZREMRANGEBYSCORE', z, 0, now - GC_STALE_MS], ['ZRANGE', z, 0, -1]]);
+          const others = (list || []).filter((p) => p !== body.pid);
+          if (others.length >= GC_MAX) return bad('full', 409);
+          await pipeline([['ZADD', z, now, body.pid], ['EXPIRE', z, GC_TTL_S], ['HSET', info, body.pid, JSON.stringify({ mid })], ['EXPIRE', info, 3600]]);
+          // quien empieza la llamada avisa a los miembros del chat
+          if (!others.length) await notify(cid, com, room.members || 'all', mid, { title: `${room.name} · ${com.name}`, body: `${body.video ? '📹' : '📞'} ${me.label} ha empezado una llamada en grupo. Toca para unirte.`, go: `chat:${room.id}`, tag: `gc-${room.id}` });
+          return res.status(200).json({ peers: await peersOf(others) });
+        }
+        if (action === 'gc-poll') {
+          const [, , list, inbox] = await pipeline([
+            ['ZADD', z, now, body.pid], ['EXPIRE', z, GC_TTL_S],
+            ['ZRANGEBYSCORE', z, now - GC_STALE_MS, '+inf'],
+            ['LPOP', K.gcBox(cid, room.id, body.pid), 20],
+          ]);
+          return res.status(200).json({ peers: await peersOf(list), inbox: (inbox || []).map((m) => JSON.parse(m)) });
+        }
+        if (action === 'gc-send') {
+          const sig = body.sig || {};
+          if (!PID.test(body.to || '') || !['offer', 'answer'].includes(sig.t) || typeof sig.sdp !== 'string' || sig.sdp.length > MAX_SIG) return bad();
+          if (await limited(`vec:rl:gc:${cid}:${room.id}`, 300, 60)) return bad('too-many', 429);
+          const box = K.gcBox(cid, room.id, body.to);
+          await pipeline([['RPUSH', box, JSON.stringify({ from: body.pid, sig: { t: sig.t, sdp: sig.sdp } })], ['EXPIRE', box, GC_TTL_S]]);
+          return ok();
+        }
+        await pipeline([['ZREM', z, body.pid], ['DEL', K.gcBox(cid, room.id, body.pid)], ['HDEL', info, body.pid]]);
         return ok();
       }
 
@@ -689,20 +767,23 @@ module.exports = async (req, res) => {
       }
       case 'dm-send': {
         const text = cleanText(body.text, MAX_TEXT);
-        if (!text) return bad();
+        if (!text && !(body.files || []).length) return bad();
         // un cargo escribe en la conversación de otra vivienda; un vecino solo en la suya
         const who = admin && body.mid && body.mid !== mid ? body.mid : mid;
         if (!com.units[who]) return bad('gone', 404);
         if (await limited(`vec:rl:msg:${cid}:${mid}`, MSGS_PER_MIN, 60)) return bad('too-many', 429);
         const fromBoard = who !== mid; // respuesta de la presidencia
-        const msg = { id: randomId(6), t: Date.now(), by: mid, role: fromBoard ? role : '', text };
+        let files = [];
+        try { files = await attachFiles(cid, body.files); } catch (e) { return bad('file-missing', 409); }
+        const msg = { id: randomId(6), t: Date.now(), by: mid, role: fromBoard ? role : '', text, ...(files.length ? { files } : {}) };
+        const preview = text || filesNote(files);
         await pipeline([
           ['RPUSH', K.dm(cid, who), JSON.stringify(msg)],
           ['LTRIM', K.dm(cid, who), -KEEP_DM, -1],
-          ['HSET', K.dmIndex(cid), who, JSON.stringify({ t: msg.t, from: fromBoard ? 'junta' : 'vecino', text: text.slice(0, 120) })],
+          ['HSET', K.dmIndex(cid), who, JSON.stringify({ t: msg.t, from: fromBoard ? 'junta' : 'vecino', text: preview.slice(0, 120) })],
         ]);
-        if (body.quiet) { /* registro de una llamada contestada: sin aviso */ } else if (fromBoard) await notify(cid, com, who, mid, { title: com.name, body: `✉️ Respuesta de la presidencia: ${short(text)}`, go: 'contact', tag: 'dm' });
-        else await notify(cid, com, 'admins', mid, { title: com.name, body: `✉️ Vivienda ${me.label}: ${short(text)}`, go: `thread:${mid}`, tag: `dm-${mid}` });
+        if (body.quiet) { /* registro de una llamada contestada: sin aviso */ } else if (fromBoard) await notify(cid, com, who, mid, { title: com.name, body: `✉️ Respuesta de la presidencia: ${short(preview)}`, go: 'contact', tag: 'dm' });
+        else await notify(cid, com, 'admins', mid, { title: com.name, body: `✉️ Vivienda ${me.label}: ${short(preview)}`, go: `thread:${mid}`, tag: `dm-${mid}` });
         return ok({ t: msg.t });
       }
 
@@ -823,7 +904,8 @@ module.exports = async (req, res) => {
 
       // ----- Archivos del tablón -----
       case 'file-put': {
-        if (!admin) return needAdmin();
+        if (me.blocked && !admin) return bad('blocked', 403);
+        if (!admin && await limited(`vec:rl:file:${cid}:${mid}`, 60, 3600)) return bad('too-many', 429);
         const part = Number(body.part);
         const parts = Number(body.parts);
         if (!FID.test(body.fid || '') || !Number.isInteger(parts) || parts < 1 || parts > MAX_PARTS || !Number.isInteger(part) || part < 0 || part >= parts) return bad();
