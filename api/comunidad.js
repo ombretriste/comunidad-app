@@ -25,6 +25,18 @@
 //   POST { action: 'unit-code' | 'unit-del' | 'req-del', code, … }        (solo cargos)
 //   POST { action: 'rename', code, name }                 (solo el presidente)
 //   POST { action: 'handover', code, pres, vice }         (solo el presidente: nuevos cargos)
+//   POST { action: 'icon-set', code, data }              (solo el presidente: icono de la comunidad, JPEG en data URL; '' lo quita)
+//   POST { action: 'icon-get', code }                     -> { data }
+//   POST { action: 'file-put', code, fid, part, parts, data } (cargos: trozo en base64 de un archivo del tablón)
+//   POST { action: 'file-get', code, fid, part }          -> { data }
+//   Avisos push:
+//   POST { action: 'push-key' }                           -> { publicKey }   (clave VAPID pública)
+//   POST { action: 'subscribe', code, device, sub }       -> { ok }          (este dispositivo recibe avisos de su vivienda)
+//   POST { action: 'unsubscribe', device }                -> { ok }
+//   POST { action: 'notes', device }                      -> { notes }       (avisos pendientes; los pide el service worker)
+//
+// Los avisos son pushes vacíos: el servidor deja el texto en el buzón del dispositivo (`vec:n:`) y el
+// service worker lo recoge con `notes` al recibir el push. Así no hace falta cifrar el contenido del push.
 //
 // Almacenamiento: Upstash Redis (integración de Vercel), vía su API REST. Todas las claves empiezan
 // por «vec:», así que puede compartir base de datos con otras apps sin mezclarse.
@@ -60,6 +72,17 @@ const MAX_FAILS = 20;          // códigos equivocados por IP cada 15 minutos
 const CREATES_PER_DAY = 5;     // comunidades nuevas por IP y día
 const REQUESTS_PER_HOUR = 10;  // solicitudes de código por IP y hora
 const MSGS_PER_MIN = 20;       // mensajes por minuto y vivienda
+const DEVICE = /^[a-f0-9]{32}$/;
+const FID = /^[a-f0-9]{32}$/;
+const MAX_PART = 1300000;      // trozo de archivo en base64 (≈1 MB)
+const MAX_PARTS = 12;          // ≈12 MB por archivo (la app limita a 10 MB)
+const MAX_FILES = 5;           // archivos por anuncio
+const UPLOAD_TTL_S = 86400;    // un archivo subido que no llega a publicarse se borra al día
+const MAX_ICON = 160000;       // icono de la comunidad (JPEG pequeño en base64)
+const PUSH_TTL_S = 24 * 3600;  // un aviso que no llega en un día ya no se entrega
+const KEEP_NOTES = 20;         // avisos pendientes por dispositivo
+const NOTES_TTL_S = 7 * 86400;
+const DEVICE_TTL_S = 400 * 86400;
 
 async function redis(...command) {
   const res = await fetch(REDIS_URL, {
@@ -112,7 +135,95 @@ const K = {
   dmIndex: (cid) => `vec:c:${cid}:dmi`,
   polls: (cid) => `vec:c:${cid}:polls`,
   req: (cid) => `vec:c:${cid}:req`,
+  devs: (cid) => `vec:c:${cid}:devs`,   // hash dispositivo -> vivienda
+  dev: (d) => `vec:dev:${d}`,           // { cid, mid, sub }
+  notes: (d) => `vec:n:${d}`,
+  file: (cid, fid, part) => `vec:c:${cid}:f:${fid}:${part}`,
+  icon: (cid) => `vec:c:${cid}:icon`,
 };
+const fileKeys = (cid, files) => (files || []).flatMap((f) => Array.from({ length: f.parts }, (_, i) => K.file(cid, f.fid, i)));
+function cleanFiles(list) {
+  if (!Array.isArray(list)) return [];
+  return list.slice(0, MAX_FILES).filter((f) => f && FID.test(f.fid || '') && Number.isInteger(f.parts) && f.parts >= 1 && f.parts <= MAX_PARTS)
+    .map((f) => ({ fid: f.fid, parts: f.parts, name: cleanText(f.name, 120) || 'archivo', type: cleanText(f.type, 100), size: Math.max(0, Math.min(15e6, Number(f.size) || 0)) }));
+}
+
+// ---------- Avisos push (VAPID, RFC 8292, con WebCrypto) ----------
+
+const b64u = (bytes) => btoa(String.fromCharCode(...new Uint8Array(bytes))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+const unb64u = (s) => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((s.length + 3) % 4)), (c) => c.charCodeAt(0));
+const utf8 = (s) => new TextEncoder().encode(s);
+let vapidCache;
+async function vapidKeys() {
+  if (vapidCache) return vapidCache;
+  let raw = await redis('GET', 'vec:vapid');
+  if (!raw) {
+    const pair = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
+    const jwk = await crypto.subtle.exportKey('jwk', pair.privateKey);
+    await redis('SET', 'vec:vapid', JSON.stringify({ kty: jwk.kty, crv: jwk.crv, x: jwk.x, y: jwk.y, d: jwk.d }), 'NX');
+    raw = await redis('GET', 'vec:vapid'); // por si otra llamada la creó a la vez
+  }
+  const jwk = JSON.parse(raw);
+  const key = await crypto.subtle.importKey('jwk', { ...jwk, ext: true }, { name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign']);
+  const pub = new Uint8Array(65);
+  pub[0] = 4;
+  pub.set(unb64u(jwk.x), 1);
+  pub.set(unb64u(jwk.y), 33);
+  vapidCache = { key, publicKey: b64u(pub) };
+  return vapidCache;
+}
+async function vapidHeader(endpoint, subject) {
+  const { key, publicKey } = await vapidKeys();
+  const head = b64u(utf8(JSON.stringify({ typ: 'JWT', alg: 'ES256' })));
+  const body = b64u(utf8(JSON.stringify({ aud: new URL(endpoint).origin, exp: Math.floor(Date.now() / 1000) + 12 * 3600, sub: subject })));
+  const sig = await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, key, utf8(`${head}.${body}`));
+  return `vapid t=${head}.${body}.${b64u(sig)}, k=${publicKey}`;
+}
+async function sendPush(sub, subject) {
+  const headers = { Authorization: await vapidHeader(sub.endpoint, subject), TTL: String(PUSH_TTL_S), Urgency: 'normal', 'Content-Length': '0' };
+  const res = await fetch(sub.endpoint, { method: 'POST', headers });
+  return res.status;
+}
+let SUBJECT = 'https://comunidad.vercel.app'; // se ajusta en cada llamada con el dominio real
+async function forgetDevice(device, cid) {
+  const cmds = [['DEL', K.dev(device)], ['DEL', K.notes(device)]];
+  if (cid) cmds.push(['HDEL', K.devs(cid), device]);
+  await pipeline(cmds);
+}
+// Avisa a las viviendas de la comunidad. `to`: 'all' | 'admins' | mid; `skip`: vivienda que lo provoca.
+// note = { title, body, go, tag }
+async function notify(cid, com, to, skip, note) {
+  try {
+    const flat = (await redis('HGETALL', K.devs(cid))) || [];
+    const targets = [];
+    for (let i = 0; i < flat.length; i += 2) {
+      const [device, mid] = [flat[i], flat[i + 1]];
+      if (mid === skip || !com.units[mid]) continue;
+      if (to === 'all' || (to === 'admins' && isAdmin(com, mid)) || to === mid) targets.push(device);
+    }
+    if (!targets.length) return;
+    const n = JSON.stringify({ ...note, t: Date.now() });
+    const subs = await pipeline(targets.flatMap((d) => [
+      ['RPUSH', K.notes(d), n], ['LTRIM', K.notes(d), -KEEP_NOTES, -1], ['EXPIRE', K.notes(d), NOTES_TTL_S], ['GET', K.dev(d)],
+    ]));
+    await Promise.all(targets.map(async (device, i) => {
+      const raw = subs[i * 4 + 3];
+      if (!raw) { await redis('HDEL', K.devs(cid), device); return; }
+      try {
+        const status = await sendPush(JSON.parse(raw).sub, SUBJECT);
+        if (status === 404 || status === 410) await forgetDevice(device, cid);
+      } catch (_) { /* el servicio push no responde: este aviso se pierde, el dato no */ }
+    }));
+  } catch (_) { /* los avisos nunca impiden guardar */ }
+}
+// Quita los dispositivos de una vivienda (al cambiar su código o eliminarla: tendrán que volver a entrar)
+async function dropUnitDevices(cid, mid) {
+  const flat = (await redis('HGETALL', K.devs(cid))) || [];
+  const ds = [];
+  for (let i = 0; i < flat.length; i += 2) if (flat[i + 1] === mid) ds.push(flat[i]);
+  if (ds.length) await pipeline(ds.flatMap((d) => [['DEL', K.dev(d)], ['DEL', K.notes(d)], ['HDEL', K.devs(cid), d]]));
+}
+const short = (s, n = 110) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
 
 const clientIp = (req) => String(req.headers?.['x-forwarded-for'] || req.headers?.['x-real-ip'] || 'desconocida').split(',')[0].trim();
 // Límite por ventana de tiempo: true si ya se ha llegado
@@ -162,16 +273,20 @@ async function closePoll(cid, com, poll, by) {
     : `Empate entre ${r.winners.map((w) => `«${w}»`).join(' y ')}.`;
   const text = `${verdict}\n\n${lines.join('\n')}\n\nHan votado ${r.total} de ${r.units} viviendas.`;
   await addPost(cid, { title: `Resultado de la encuesta: ${poll.q}`, text, by: by || '', role: by ? roleOf(com, by) : 'auto', kind: 'result', poll: poll.id });
+  await notify(cid, com, 'all', '', { title: com.name, body: `📊 Resultado de la encuesta «${short(poll.q, 80)}»: ${short(verdict, 90)}`, go: 'board', tag: `poll-${poll.id}` });
 }
 async function addPost(cid, post) {
   const board = await getJSON(K.board(cid), []);
   board.push({ id: randomId(6), t: Date.now(), pin: false, ...post });
   // se guardan los últimos KEEP_POSTS, pero los fijados no se pierden
+  const gone = [];
   while (board.length > KEEP_POSTS) {
     const i = board.findIndex((p) => !p.pin);
-    board.splice(i < 0 ? 0 : i, 1);
+    gone.push(...board.splice(i < 0 ? 0 : i, 1));
   }
   await setJSON(K.board(cid), board);
+  const keys = gone.flatMap((p) => fileKeys(cid, p.files));
+  if (keys.length) await redis('DEL', ...keys);
 }
 async function loadPolls(cid, com) {
   const polls = await getJSON(K.polls(cid), []);
@@ -206,6 +321,7 @@ module.exports = async (req, res) => {
   }
   if (req.method !== 'POST') return res.status(405).json({ error: 'method' });
 
+  SUBJECT = `https://${req.headers?.host || 'comunidad.vercel.app'}`;
   let body = req.body || {};
   if (typeof body === 'string') { try { body = JSON.parse(body); } catch { body = {}; } }
   const { action } = body;
@@ -214,6 +330,21 @@ module.exports = async (req, res) => {
 
   try {
     // ---------- Sin código ----------
+    if (action === 'push-key') return res.status(200).json({ publicKey: (await vapidKeys()).publicKey });
+    if (action === 'unsubscribe') {
+      if (!DEVICE.test(body.device || '')) return bad();
+      const d = await getJSON(K.dev(body.device), null);
+      await forgetDevice(body.device, d && d.cid);
+      return res.status(200).json({ ok: true });
+    }
+    if (action === 'notes') {
+      if (!DEVICE.test(body.device || '')) return bad();
+      const [raw] = await pipeline([['LRANGE', K.notes(body.device), 0, -1], ['DEL', K.notes(body.device)]]);
+      const d = await getJSON(K.dev(body.device), null);
+      const com = d && await getJSON(K.com(d.cid), null);
+      return res.status(200).json({ notes: (raw || []).map((n) => JSON.parse(n)), name: com ? com.name : '' });
+    }
+
     if (action === 'create') {
       const name = cleanText(body.name, MAX_NAME) || 'Mi comunidad';
       const label = cleanLabel(body.label);
@@ -250,6 +381,7 @@ module.exports = async (req, res) => {
       if (!reqs.some((r) => sameLabel(r.label, label))) {
         reqs.push({ id: randomId(6), label, t: Date.now() });
         await setJSON(K.req(cid), reqs.slice(-KEEP_REQ));
+        await notify(cid, com, 'admins', '', { title: com.name, body: `🔑 La vivienda ${label} ha pedido su código de acceso`, go: 'admin', tag: 'requests' });
       }
       return res.status(200).json({ ok: true, name: com.name });
     }
@@ -273,6 +405,18 @@ module.exports = async (req, res) => {
     const needAdmin = () => bad('forbidden', 403);
 
     switch (action) {
+      case 'subscribe': {
+        const sub = body.sub;
+        if (!DEVICE.test(body.device || '') || !sub || typeof sub.endpoint !== 'string' || !/^https:\/\//.test(sub.endpoint) || JSON.stringify(sub).length > 4000) return bad();
+        const old = await getJSON(K.dev(body.device), null);
+        const cmds = [
+          ['SET', K.dev(body.device), JSON.stringify({ cid, mid, sub: { endpoint: sub.endpoint, keys: sub.keys || {} }, t: Date.now() }), 'EX', DEVICE_TTL_S],
+          ['HSET', K.devs(cid), body.device, mid],
+        ];
+        if (old && old.cid !== cid) cmds.push(['HDEL', K.devs(old.cid), body.device]);
+        await pipeline(cmds);
+        return ok();
+      }
       case 'state': {
         if (Date.now() - (me.seen || 0) > 3600e3) { me.seen = Date.now(); await saveCom(); }
         const [board, polls, chatTail, dmIndex, reqs] = await Promise.all([
@@ -286,7 +430,7 @@ module.exports = async (req, res) => {
         const idx = {};
         for (let i = 0; i < (dmIndex || []).length; i += 2) idx[dmIndex[i]] = JSON.parse(dmIndex[i + 1]);
         const out = {
-          community: { name: com.name, pub: com.pub, chatOpen: com.chatOpen },
+          community: { name: com.name, pub: com.pub, chatOpen: com.chatOpen, iconV: com.iconV || 0 },
           me: { mid, label: me.label, role, blocked: !!me.blocked },
           board: board.slice().reverse().map((p) => ({ ...p, byLabel: p.by ? unitName(com, p.by) : '' })),
           polls: polls.slice().reverse().map((p) => pollView(p, com, mid)),
@@ -307,8 +451,16 @@ module.exports = async (req, res) => {
         if (!admin) return needAdmin();
         const title = cleanText(body.title, 140);
         const text = cleanText(body.text, MAX_POST);
-        if (!title && !text) return bad();
-        await addPost(cid, { title, text, by: mid, role, pin: !!body.pin });
+        const files = cleanFiles(body.files);
+        if (!title && !text && !files.length) return bad();
+        if (files.length) {
+          const keys = fileKeys(cid, files);
+          const exists = await pipeline(keys.map((k) => ['EXISTS', k]));
+          if (exists.some((e) => !Number(e))) return bad('file-missing', 409);
+          await pipeline(keys.map((k) => ['PERSIST', k])); // ya forma parte de un anuncio: no caduca
+        }
+        await addPost(cid, { title, text, by: mid, role, pin: !!body.pin, ...(files.length ? { files } : {}) });
+        await notify(cid, com, 'all', mid, { title: com.name, body: `📌 ${short(title || text, 120)}`, go: 'board', tag: 'board' });
         return ok();
       }
       case 'post-del':
@@ -317,9 +469,12 @@ module.exports = async (req, res) => {
         const board = await getJSON(K.board(cid), []);
         const i = board.findIndex((p) => p.id === body.id);
         if (i < 0) return bad('gone', 404);
-        if (action === 'post-del') board.splice(i, 1);
+        let removed = null;
+        if (action === 'post-del') [removed] = board.splice(i, 1);
         else board[i].pin = !!body.pin;
         await setJSON(K.board(cid), board);
+        const keys = removed ? fileKeys(cid, removed.files) : [];
+        if (keys.length) await redis('DEL', ...keys);
         return ok();
       }
 
@@ -342,6 +497,7 @@ module.exports = async (req, res) => {
         const s = await redis('INCR', K.chatSeq(cid));
         const msg = { s, t: Date.now(), mid, text };
         await pipeline([['RPUSH', K.chat(cid), JSON.stringify(msg)], ['LTRIM', K.chat(cid), -KEEP_CHAT, -1]]);
+        await notify(cid, com, 'all', mid, { title: `Chat · ${com.name}`, body: `${me.label}${role ? ` (${role === 'pres' ? 'Presidente' : 'Vicepresidente'})` : ''}: ${short(text)}`, go: 'chat', tag: 'chat' });
         return ok({ s, t: msg.t });
       }
       case 'chat-del': {
@@ -395,6 +551,8 @@ module.exports = async (req, res) => {
           ['LTRIM', K.dm(cid, who), -KEEP_DM, -1],
           ['HSET', K.dmIndex(cid), who, JSON.stringify({ t: msg.t, from: fromBoard ? 'junta' : 'vecino', text: text.slice(0, 120) })],
         ]);
+        if (fromBoard) await notify(cid, com, who, mid, { title: com.name, body: `✉️ Respuesta de la presidencia: ${short(text)}`, go: 'contact', tag: 'dm' });
+        else await notify(cid, com, 'admins', mid, { title: com.name, body: `✉️ Vivienda ${me.label}: ${short(text)}`, go: `thread:${mid}`, tag: `dm-${mid}` });
         return ok({ t: msg.t });
       }
 
@@ -407,8 +565,10 @@ module.exports = async (req, res) => {
         const closes = Number(body.closes) || 0;
         if (closes && closes < Date.now() + 60e3) return bad('past');
         const polls = await getJSON(K.polls(cid), []);
-        polls.push({ id: randomId(6), q, desc: cleanText(body.desc, 1500), opts, t: Date.now(), by: mid, closes, closed: 0, votes: {} });
+        const pid = randomId(6);
+        polls.push({ id: pid, q, desc: cleanText(body.desc, 1500), opts, t: Date.now(), by: mid, closes, closed: 0, votes: {} });
         await setJSON(K.polls(cid), polls.slice(-KEEP_POLLS));
+        await notify(cid, com, 'all', mid, { title: com.name, body: `🗳️ Nueva encuesta: ${short(q, 120)}`, go: 'polls', tag: `poll-${pid}` });
         return ok();
       }
       case 'poll-vote': {
@@ -460,6 +620,7 @@ module.exports = async (req, res) => {
         if (!com.units[body.mid]) return bad('gone', 404);
         const code = await issueCode(cid, com, body.mid);
         await saveCom();
+        if (body.mid !== mid) await dropUnitDevices(cid, body.mid);
         const reqs = await getJSON(K.req(cid), []);
         const left = reqs.filter((r) => !sameLabel(r.label, com.units[body.mid].label));
         if (left.length !== reqs.length) await setJSON(K.req(cid), left);
@@ -471,6 +632,7 @@ module.exports = async (req, res) => {
         if (!u) return bad('gone', 404);
         if (isAdmin(com, body.mid)) return bad('is-admin', 409);
         delete com.units[body.mid];
+        await dropUnitDevices(cid, body.mid);
         await pipeline([['DEL', K.code(u.h)], ['DEL', K.dm(cid, body.mid)], ['HDEL', K.dmIndex(cid), body.mid]]);
         await saveCom();
         return ok();
@@ -482,7 +644,39 @@ module.exports = async (req, res) => {
         return ok();
       }
 
+      // ----- Archivos del tablón -----
+      case 'file-put': {
+        if (!admin) return needAdmin();
+        const part = Number(body.part);
+        const parts = Number(body.parts);
+        if (!FID.test(body.fid || '') || !Number.isInteger(parts) || parts < 1 || parts > MAX_PARTS || !Number.isInteger(part) || part < 0 || part >= parts) return bad();
+        if (typeof body.data !== 'string' || !body.data || body.data.length > MAX_PART || !/^[A-Za-z0-9+/=]+$/.test(body.data)) return bad();
+        if (await limited(`vec:rl:file:${cid}`, 200, 3600)) return bad('too-many', 429);
+        await redis('SET', K.file(cid, body.fid, part), body.data, 'EX', UPLOAD_TTL_S);
+        return ok();
+      }
+      case 'file-get': {
+        if (!FID.test(body.fid || '')) return bad();
+        const data = await redis('GET', K.file(cid, body.fid, Number(body.part) || 0));
+        if (!data) return bad('gone', 404);
+        return res.status(200).json({ data });
+      }
+      case 'icon-get': {
+        const data = await redis('GET', K.icon(cid));
+        return res.status(200).json({ data: data || '', v: com.iconV || 0 });
+      }
+
       // ----- Solo el presidente -----
+      case 'icon-set': {
+        if (role !== 'pres') return needAdmin();
+        const data = String(body.data || '');
+        if (data && (data.length > MAX_ICON || !/^data:image\/jpeg;base64,[A-Za-z0-9+/=]+$/.test(data))) return bad();
+        if (data) await redis('SET', K.icon(cid), data);
+        else await redis('DEL', K.icon(cid));
+        com.iconV = data ? Date.now() : 0;
+        await saveCom();
+        return ok({ v: com.iconV });
+      }
       case 'rename': {
         if (role !== 'pres') return needAdmin();
         const name = cleanText(body.name, MAX_NAME);
@@ -506,6 +700,7 @@ module.exports = async (req, res) => {
         if (before.pres !== pres || before.vice !== vice) {
           const text = `La presidencia de la comunidad pasa a la vivienda ${com.units[pres].label}${vice ? ` y la vicepresidencia a la vivienda ${com.units[vice].label}` : ''}. Gracias a quienes han ocupado los cargos hasta ahora.`;
           await addPost(cid, { title: 'Nuevos cargos de la comunidad', text, by: mid, role: 'pres', kind: 'handover' });
+          await notify(cid, com, 'all', mid, { title: com.name, body: `👑 Nuevos cargos: presidencia para la vivienda ${com.units[pres].label}${vice ? `, vicepresidencia para la ${com.units[vice].label}` : ''}`, go: 'board', tag: 'board' });
         }
         return ok();
       }
