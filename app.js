@@ -1,7 +1,7 @@
 'use strict';
 
 // Versión de la app (se ve en Información). Arreglos y ajustes: 0.x.y; novedades: 0.x.0.
-const APP_VERSION = '0.5.0';
+const APP_VERSION = '0.5.1';
 const APP_NAME = 'Mi comunidad';
 // Uso de la app en Vercel Analytics: cada sección cuenta como una página virtual (nunca datos).
 const track = (path) => { try { window.va?.('pageview', { path }); } catch (_) { /* sin analítica */ } };
@@ -324,7 +324,7 @@ function renderWelcome(home) {
     <section class="welcome-hero">
       ${logoSVG(84)}
       <h1>${esc(linkName || APP_NAME)}</h1>
-      <p>La app de tu comunidad de vecinos: tablón de anuncios, chat, encuestas y contacto directo con la presidencia. Sin nombres ni datos personales: cada vivienda entra con su propio código.</p>
+      <p>La app de tu comunidad de vecinos: tablón de anuncios, chat, encuestas y contacto directo con la presidencia. Sin nombres ni datos personales: cada vivienda entra con su propio código, que pueden usar todas las personas que viven en ella.</p>
     </section>
     <section class="card request-card">
       <h2>Pide tu código</h2>
@@ -1131,7 +1131,7 @@ function renderAdmin(body) {
     b.disabled = true;
     try {
       if (exists) {
-        const { code, label } = await call('unit-code', { mid: exists.mid });
+        const { code, label } = await call('unit-code', { mid: exists.mid, device: pushPref.device });
         showCodes([{ label, code }]);
       } else {
         const { codes } = await call('units-add', { labels: [r.label] });
@@ -1277,9 +1277,9 @@ function openUnitSheet(u) {
     </div>`;
   sheet.querySelector('[data-close]').addEventListener('click', closeSheet);
   sheet.querySelector('[data-code]').addEventListener('click', () => confirmSheet({
-    title: '¿Generar un código nuevo?', text: `El código actual de la vivienda ${u.label} dejará de funcionar${u.mid === st.me.mid ? ' (también en este dispositivo: entrarás con el nuevo)' : ''}.`, ok: 'Generar',
+    title: '¿Generar un código nuevo?', text: `El código actual de la vivienda ${u.label} dejará de funcionar en todos los móviles que lo usen${u.mid === st.me.mid ? '; este seguirá dentro con el nuevo' : ''}.`, ok: 'Generar',
     run: async () => {
-      const { code, label } = await call('unit-code', { mid: u.mid });
+      const { code, label } = await call('unit-code', { mid: u.mid, device: pushPref.device });
       if (u.mid === st.me.mid) { sess.code = code; persist(); }
       showCodes([{ label, code }]);
       refresh();
@@ -1871,7 +1871,7 @@ function pdfCard(pdf, x0, top, w, h, c, info) {
   y -= 12;
   pdf.center(cx, y, c.label, 22, 'F2', INK);
   y -= 20;
-  pdf.center(cx, y, 'CÓDIGO DE ACCESO PERSONAL', 7.5, 'F1', GREY);
+  pdf.center(cx, y, 'CÓDIGO DE ACCESO DE LA VIVIENDA', 7.5, 'F1', GREY);
   y -= 8;
   const bw = w - 70;
   const bh = 30;
@@ -1887,7 +1887,7 @@ function pdfCard(pdf, x0, top, w, h, c, info) {
     wrapText(text, 9.2, maxW).forEach((l) => { pdf.text(left, y, l, 9.2, 'F1', '0.2 0.21 0.24'); y -= 12; });
     y -= 8;
   };
-  para('Personal e intransferible', 'Este código identifica a tu vivienda en la app de la comunidad. No lo compartas ni lo publiques: quien lo tenga podrá leer, escribir y votar en nombre de tu vivienda.');
+  para('Código de tu vivienda, intransferible', 'Pueden usarlo todas las personas que viven en ella, cada una en su móvil: todo lo que hagáis cuenta como la misma vivienda (un solo voto). No lo compartas fuera de casa ni lo publiques.');
   para('Cómo entrar', `Abre ${info.url} en el móvil, pulsa «Ya tengo mi código» y escríbelo. Puedes añadir la app a la pantalla de inicio para tenerla a mano.`);
   para('¿Lo has perdido o lo has olvidado?', `Vuelve a solicitarlo desde la app en «Solicitar mi código», con el código de la comunidad ${info.pub}. Te dejaremos uno nuevo en tu buzón y el anterior dejará de funcionar.`);
   pdf.center(cx, top - h + 14, `Entregado el ${info.date} · La presidencia`, 6.5, 'F1', GREY);
@@ -2258,7 +2258,7 @@ const TEMPLATES = [
         { t: 'step', n: 4, text: 'Consejo: añade la app a la pantalla de inicio del móvil para tenerla siempre a mano y activa los avisos:' },
         { t: 'list', bullets: true, indent: 36, items: ['iPhone (Safari): botón Compartir › Añadir a pantalla de inicio › Añadir.', 'Android (Chrome): menú de los tres puntos, arriba a la derecha › Instalar aplicación (o Añadir a pantalla de inicio) › Instalar.'] },
         ...(v.obs ? [{ t: 'gap', h: 4 }, { t: 'p', text: v.obs }] : []),
-        { t: 'note', text: 'Cada vivienda tiene un único código, personal e intransferible. Si lo pierdes, puedes volver a solicitarlo desde la app.' },
+        { t: 'note', text: 'Cada vivienda tiene un único código, intransferible, que pueden usar todas las personas que viven en ella, cada una en su móvil. Si lo pierdes, puedes volver a solicitarlo desde la app.' },
         { t: 'close', place: v.localidad, sign: v.firma },
       ],
       board: { title: 'Nueva app de la comunidad', text: `La comunidad ya tiene app: ${location.origin}${location.pathname}\n\nPara entrar, pulsa «Solicitar mi código» con el código de la comunidad ${st.community.pub} y tu piso y puerta. Recibirás tu código personal en el buzón.${v.obs ? `\n\n${v.obs}` : ''}` },
@@ -2472,7 +2472,7 @@ function openInfoSheet() {
     <h2 class="sheet-title">${esc(name)}</h2>
     <p class="small muted">Versión ${APP_VERSION}</p>
     <p class="small">La app de tu comunidad de vecinos: tablón de anuncios de la presidencia, chat con todos los vecinos, encuestas y un buzón privado para escribir al presidente y al vicepresidente.</p>
-    <p class="small muted">Nadie da su nombre ni su teléfono: cada vivienda se identifica con el código que deja la presidencia en su buzón. Las conversaciones con la presidencia solo las leen el presidente y el vicepresidente, y el voto en las encuestas es secreto.</p>
+    <p class="small muted">Nadie da su nombre ni su teléfono: cada vivienda se identifica con el código que deja la presidencia en su buzón, y pueden usarlo todas las personas que viven en ella, cada una en su móvil. Las conversaciones con la presidencia solo las leen el presidente y el vicepresidente, y el voto en las encuestas es secreto.</p>
     <div class="center-actions"><button type="button" class="done-btn" data-close>Cerrar</button></div>`);
   s.querySelector('[data-close]').addEventListener('click', closeSheet);
 }

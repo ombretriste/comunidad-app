@@ -218,10 +218,10 @@ async function notify(cid, com, to, skip, note) {
   } catch (_) { /* los avisos nunca impiden guardar */ }
 }
 // Quita los dispositivos de una vivienda (al cambiar su código o eliminarla: tendrán que volver a entrar)
-async function dropUnitDevices(cid, mid) {
+async function dropUnitDevices(cid, mid, keep = '') {
   const flat = (await redis('HGETALL', K.devs(cid))) || [];
   const ds = [];
-  for (let i = 0; i < flat.length; i += 2) if (flat[i + 1] === mid) ds.push(flat[i]);
+  for (let i = 0; i < flat.length; i += 2) if (flat[i + 1] === mid && flat[i] !== keep) ds.push(flat[i]);
   if (ds.length) await pipeline(ds.flatMap((d) => [['DEL', K.dev(d)], ['DEL', K.notes(d)], ['HDEL', K.devs(cid), d]]));
 }
 const short = (s, n = 110) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
@@ -621,7 +621,8 @@ module.exports = async (req, res) => {
         if (!com.units[body.mid]) return bad('gone', 404);
         const code = await issueCode(cid, com, body.mid);
         await saveCom();
-        if (body.mid !== mid) await dropUnitDevices(cid, body.mid);
+        // los móviles que usaban el código anterior dejan de recibir avisos (menos el de quien lo genera)
+        await dropUnitDevices(cid, body.mid, body.mid === mid ? body.device : '');
         const reqs = await getJSON(K.req(cid), []);
         const left = reqs.filter((r) => !sameLabel(r.label, com.units[body.mid].label));
         if (left.length !== reqs.length) await setJSON(K.req(cid), left);

@@ -1,6 +1,6 @@
 # Mi comunidad
 
-App web instalable (PWA) para una comunidad de vecinos. Versión 0.5.0.
+App web instalable (PWA) para una comunidad de vecinos. Versión 0.5.1.
 
 - **Tablón de anuncios**: solo publican el presidente y el vicepresidente; se pueden fijar y borrar.
 - **Contacta con la presidencia**: cada vivienda tiene una conversación privada que solo leen el presidente y el vicepresidente.
@@ -14,7 +14,7 @@ App web instalable (PWA) para una comunidad de vecinos. Versión 0.5.0.
 
 ## Sin datos personales
 
-Cada vivienda entra con un código propio de 12 caracteres (`XXXX-XXXX-XXXX`) que la presidencia deja en su buzón. Los vecinos se ven solo por su vivienda (p. ej. «3º B»). El servidor guarda únicamente el resumen SHA-256 de cada código: si se pierde, se genera otro y el anterior deja de valer.
+Cada vivienda entra con un código propio de 12 caracteres (`XXXX-XXXX-XXXX`) que la presidencia deja en su buzón. Pueden usarlo a la vez todas las personas de la vivienda, cada una en su móvil: todo (mensajes, conversación con la presidencia, voto) cuenta como la misma vivienda. Los vecinos se ven solo por su vivienda (p. ej. «3º B»). El servidor guarda únicamente el resumen SHA-256 de cada código: si se pierde, se genera otro y el anterior deja de valer.
 
 Sin código, la app muestra la pantalla para **solicitarlo**: el vecino indica el código de la comunidad (o llega con el enlace `?c=XXXXXX`) y su vivienda, confirma la solicitud y la app le responde que lo recibirá en su buzón en los próximos días. La solicitud aparece en Gestión.
 
