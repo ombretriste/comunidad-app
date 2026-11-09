@@ -86,6 +86,9 @@ const CREATES_PER_DAY = 5;     // comunidades nuevas por IP y día
 const REQUESTS_PER_HOUR = 10;  // solicitudes de código por IP y hora
 const MSGS_PER_MIN = 20;       // mensajes por minuto y vivienda
 const DEVICE = /^[a-f0-9]{32}$/;
+// Solo los servicios de avisos de los navegadores (Apple, Google, Mozilla, Microsoft): el servidor nunca
+// enviará peticiones a otras direcciones aunque alguien registre una a propósito.
+const PUSH_HOST = /^https:\/\/([a-z0-9-]+\.)*(push\.apple\.com|fcm\.googleapis\.com|googleapis\.com|push\.services\.mozilla\.com|notify\.windows\.com)(:\d+)?\//i;
 const FID = /^[a-f0-9]{32}$/;
 const MAX_PART = 1300000;      // trozo de archivo en base64 (≈1 MB)
 const MAX_PARTS = 12;          // ≈12 MB por archivo (la app limita a 10 MB)
@@ -129,6 +132,13 @@ async function pipeline(commands) {
   const json = await res.json();
   if (!Array.isArray(json)) throw new Error(json.error || 'pipeline');
   return json.map((r) => r.result);
+}
+// Comunidad leída de la base de datos. Las viviendas van en un objeto sin prototipo: así un identificador
+// enviado a propósito como «__proto__» o «constructor» no se confunde con una vivienda que existe.
+async function loadCom(cid) {
+  const com = await getJSON(K.com(cid), null);
+  if (com) com.units = Object.assign(Object.create(null), com.units || {});
+  return com;
 }
 const getJSON = async (key, fallback) => { const raw = await redis('GET', key); try { return raw ? JSON.parse(raw) : fallback; } catch { return fallback; } };
 const setJSON = (key, value) => redis('SET', key, JSON.stringify(value));
@@ -421,7 +431,7 @@ module.exports = async (req, res) => {
       if (!DEVICE.test(body.device || '')) return bad();
       const [raw] = await pipeline([['LRANGE', K.notes(body.device), 0, -1], ['DEL', K.notes(body.device)]]);
       const d = await getJSON(K.dev(body.device), null);
-      const com = d && await getJSON(K.com(d.cid), null);
+      const com = d && await loadCom(d.cid);
       return res.status(200).json({ notes: (raw || []).map((n) => JSON.parse(n)), name: com ? com.name : '' });
     }
 
@@ -438,7 +448,7 @@ module.exports = async (req, res) => {
         pub = '';
       }
       if (!pub) return bad('busy', 503);
-      const com = { id: cid, name, pub, created: Date.now(), pres: '', vice: '', chatOpen: true, units: {} };
+      const com = { id: cid, name, pub, created: Date.now(), pres: '', vice: '', chatOpen: true, units: Object.create(null) };
       const mid = newUnit(com, label);
       com.pres = mid;
       const code = await issueCode(cid, com, mid);
@@ -449,9 +459,10 @@ module.exports = async (req, res) => {
 
     if (action === 'community' || action === 'request') {
       const pub = normCode(body.pub);
+      if (await limited(`vec:rl:pub:${ipKey}`, 60, 3600)) return bad('too-many', 429); // sin probar códigos de comunidad a ciegas
       if (pub.length !== PUB_LEN) return bad('no-community', 404);
       const cid = await redis('GET', K.pub(pub));
-      const com = cid && await getJSON(K.com(cid), null);
+      const com = cid && await loadCom(cid);
       if (!com) return bad('no-community', 404);
       if (action === 'community') return res.status(200).json({ name: com.name });
       const label = cleanLabel(body.label);
@@ -472,7 +483,7 @@ module.exports = async (req, res) => {
     const norm = normCode(body.code);
     const link = norm.length === CODE_LEN ? await redis('GET', K.code(await codeHash(norm))) : null;
     const [cid, mid] = String(link || '').split(':');
-    const com = link && await getJSON(K.com(cid), null);
+    const com = link && await loadCom(cid);
     if (!com || !com.units[mid]) {
       await pipeline([['INCR', failKey], ['EXPIRE', failKey, 900, 'NX']]);
       return bad('bad-code', 401);
@@ -487,7 +498,7 @@ module.exports = async (req, res) => {
     switch (action) {
       case 'subscribe': {
         const sub = body.sub;
-        if (!DEVICE.test(body.device || '') || !sub || typeof sub.endpoint !== 'string' || !/^https:\/\//.test(sub.endpoint) || JSON.stringify(sub).length > 4000) return bad();
+        if (!DEVICE.test(body.device || '') || !sub || typeof sub.endpoint !== 'string' || !PUSH_HOST.test(sub.endpoint) || JSON.stringify(sub).length > 4000) return bad();
         const old = await getJSON(K.dev(body.device), null);
         const cmds = [
           ['SET', K.dev(body.device), JSON.stringify({ cid, mid, sub: { endpoint: sub.endpoint, keys: sub.keys || {} }, t: Date.now() }), 'EX', DEVICE_TTL_S],
@@ -982,6 +993,7 @@ module.exports = async (req, res) => {
         return bad('unknown-action');
     }
   } catch (err) {
-    return res.status(500).json({ error: 'server', detail: String(err.message || err).slice(0, 200) });
+    console.error('comunidad', action, err && err.message); // el detalle queda en los registros de Vercel, no en la respuesta
+    return res.status(500).json({ error: 'server' });
   }
 };

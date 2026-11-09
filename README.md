@@ -1,6 +1,6 @@
 # Mi comunidad
 
-App web instalable (PWA) para una comunidad de vecinos. Versión 0.11.2.
+App web instalable (PWA) para una comunidad de vecinos. Versión 0.11.3.
 
 - **Tablón de anuncios**: solo publican el presidente y el vicepresidente; se pueden fijar y borrar.
 - **Contacta con la presidencia**: cada vivienda tiene una conversación privada que solo leen el presidente y el vicepresidente. Se borra cuando entra alguien nuevo en los cargos (no si solo se intercambian).
@@ -24,6 +24,17 @@ Cada vivienda entra con un código propio de 12 caracteres (`XXXX-XXXX-XXXX`) qu
 Sin código, la app muestra la pantalla para **solicitarlo**: el vecino indica el código de la comunidad (o llega con el enlace `?c=XXXXXX`) y su vivienda, confirma la solicitud y la app le responde que lo recibirá en su buzón en los próximos días. La solicitud aparece en Gestión.
 
 Con código, la app abre directamente la pantalla principal (sin pantalla de entrada).
+
+## Seguridad
+
+- **Cabeceras** (vercel.json): CSP estricta (solo scripts propios, sin `eval`, sin scripts en línea; conexiones solo al propio servidor), `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `X-Frame-Options: DENY` / `frame-ancestors 'none'` y `Permissions-Policy` (cámara y micrófono solo para la propia app; sin ubicación ni pagos).
+- **Permisos en el servidor**: todo lo que no es de cualquier vecino (tablón, encuestas, gestión, moderación, documentos, cargos) se comprueba en `api/comunidad.js` según el cargo de la vivienda que llama; la app solo oculta botones.
+- **Códigos**: 12 caracteres (≈60 bits); 20 intentos fallidos por IP cada 15 min. Se guardan legibles solo para los cargos (tarjetas); entrar se comprueba con su SHA-256.
+- **Límites**: comunidades nuevas 5/día por IP, solicitudes de código 10/h, consultas de código de comunidad 60/h, mensajes 20/min por vivienda, archivos 60/h por vivienda, señales de llamada limitadas.
+- **Entradas**: textos recortados y limpiados, identificadores validados con patrones; las viviendas se guardan en objetos sin prototipo (un identificador `__proto__` no pasa por una vivienda).
+- **Avisos push**: solo se aceptan direcciones de los servicios de Apple, Google, Mozilla y Microsoft.
+- **En la app**: todo texto de usuario se escapa al pintarlo; los archivos se ven con pdf.js sin `eval`, imágenes en `<img>` y textos como texto; los enlaces abren aparte con `noopener`.
+- **Puntos abiertos**: no hay cifrado de extremo a extremo (la presidencia y quien administre la base de datos pueden leer los datos); un archivo se puede descargar por cualquiera de la comunidad que conozca su identificador (aleatorio de 128 bits, solo aparece en los mensajes que puede ver).
 
 ## Despliegue
 
