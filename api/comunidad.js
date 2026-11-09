@@ -189,9 +189,12 @@ const filesNote = (files) => (files.every((f) => /^image\//.test(f.type)) ? `�
 // Chats: no hay ninguno por defecto (desde la 0.8.0); los crean los cargos, para todas las viviendas
 // (members: null, también las que se den de alta después) o para algunas. El antiguo chat «general»
 // ya no se muestra.
-const roomOf = (com, id) => (com.rooms || []).find((r) => r.id === id) || null;
-const canSee = (com, room, mid) => !!room && (isAdmin(com, mid) || !room.members || room.members.includes(mid));
-const visibleRooms = (com, mid) => (com.rooms || []).filter((r) => canSee(com, r, mid));
+// Chat fijo de la presidencia: siempre existe y solo lo ven el presidente y el vicepresidente que haya
+// en cada momento (members vacío: los cargos ven todos los chats). No se puede editar, cerrar ni borrar.
+const juntaRoom = () => ({ id: 'junta', name: 'Presidencia', members: [], open: true, junta: true });
+const roomOf = (com, id) => (id === 'junta' ? juntaRoom() : (com.rooms || []).find((r) => r.id === id) || null);
+const canSee = (com, room, mid) => !!room && (isAdmin(com, mid) || (!room.junta && (!room.members || room.members.includes(mid))));
+const visibleRooms = (com, mid) => [...(isAdmin(com, mid) ? [juntaRoom()] : []), ...(com.rooms || []).filter((r) => canSee(com, r, mid))];
 
 // Servidores para conectar las llamadas: STUN siempre; TURN (Cloudflare) si Vercel tiene
 // CF_TURN_KEY_ID y CF_TURN_API_TOKEN: con datos móviles suele hacer falta para que conecten.
@@ -522,7 +525,7 @@ module.exports = async (req, res) => {
           rooms: rooms.map((r, i) => {
             const tail = tails[i * 2];
             const last = tail && tail[0] ? JSON.parse(tail[0]) : null;
-            return { id: r.id, name: r.name, members: r.members ? r.members.filter((m) => com.units[m]) : null, open: r.open !== false, last: last ? { s: last.s, t: last.t, mine: last.mid === mid } : { s: 0, t: 0 }, call: Number(tails[i * 2 + 1]) || 0 };
+            return { id: r.id, name: r.name, junta: !!r.junta, members: r.members ? r.members.filter((m) => com.units[m]) : null, open: r.open !== false, last: last ? { s: last.s, t: last.t, mine: last.mid === mid } : { s: 0, t: 0 }, call: Number(tails[i * 2 + 1]) || 0 };
           }),
           rings,
           dm: idx[mid] || null,
@@ -621,7 +624,7 @@ module.exports = async (req, res) => {
       case 'chat-open': {
         if (!admin) return needAdmin();
         const room = roomOf(com, body.room);
-        if (!room) return bad('gone', 404);
+        if (!room || room.junta) return bad('gone', 404);
         room.open = !!body.open;
         await saveCom();
         return ok({ open: !!body.open });

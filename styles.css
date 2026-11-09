@@ -691,3 +691,4 @@ body.in-call { overflow: hidden; }
 .att-gone { display: block; padding: 12px; font-size: 12.5px; font-style: italic; opacity: .8; }
 .view-actions { gap: 4px; }
 @media (max-width: 380px) { .view-actions .icon-btn.sm { width: 32px; height: 32px; flex-basis: 32px; } }
+.tile-ico.gold-ico { color: var(--gold); border-color: color-mix(in srgb, var(--gold) 50%, transparent); background: color-mix(in srgb, var(--gold) 12%, transparent); }

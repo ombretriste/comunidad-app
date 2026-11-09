@@ -1,7 +1,7 @@
 'use strict';
 
 // Versión de la app (se ve en Información). Arreglos y ajustes: 0.x.y; novedades: 0.x.0.
-const APP_VERSION = '0.10.6';
+const APP_VERSION = '0.11.0';
 const APP_NAME = 'Mi comunidad';
 // Uso de la app en Vercel Analytics: cada sección cuenta como una página virtual (nunca datos).
 const track = (path) => { try { window.va?.('pageview', { path }); } catch (_) { /* sin analítica */ } };
@@ -755,7 +755,7 @@ function messagesHTML(list, intro = '') {
 const roomsOf = () => st?.rooms || [];
 const roomById = (id) => roomsOf().find((r) => r.id === id);
 const roomUnread = (r) => r.last.s > (sess.seen.rooms[r.id] || 0) && !r.last.mine;
-const membersLabel = (r) => (r.members ? `${plural(r.members.length, 'vivienda', 'viviendas')} y la presidencia` : 'Todas las viviendas');
+const membersLabel = (r) => (r.junta ? 'Solo el presidente y el vicepresidente' : r.members ? `${plural(r.members.length, 'vivienda', 'viviendas')} y la presidencia` : 'Todas las viviendas');
 function openChats() {
   openView('rooms'); // siempre la lista de chats primero, también para los vecinos
 }
@@ -768,7 +768,7 @@ function renderRooms(body) {
     ${roomsOf().length ? '' : `<div class="empty"><span class="tile-ico">${icon('chat', 28)}</span><h3>Aún no hay chats</h3><p>${admin ? 'Pulsa «Nuevo chat» para crear el primero.' : 'Cuando la presidencia cree un chat en el que estés, aparecerá aquí.'}</p></div>`}
     <div class="rows">${roomsOf().map((r) => `
       <button class="row ${roomUnread(r) ? 'unread' : ''}" type="button" data-room="${r.id}">
-        <span class="tile-ico">${icon(r.open ? (r.members ? 'users' : 'chat') : 'lock', 20)}</span>
+        <span class="tile-ico ${r.junta ? 'gold-ico' : ''}">${icon(r.junta ? 'crown' : r.open ? (r.members ? 'users' : 'chat') : 'lock', 20)}</span>
         <span class="row-main">
           <span class="row-top"><b>${esc(r.name)}</b>${r.last.t ? `<small>${shortWhen(r.last.t)}</small>` : ''}</span>
           <span class="row-sub">${r.call ? `📞 Llamada en grupo en curso · ${plural(r.call, 'persona', 'personas')}` : r.open ? membersLabel(r) : 'Cerrado por la presidencia'}</span>
@@ -833,7 +833,9 @@ function renderChat(scroll) {
   const me = st.me;
   const general = !curRoom.members;
   const live = roomById(curRoom.id)?.call || 0;
-  const intro = `<p class="note banner">${icon('users', 16)} <span>${general ? 'Chat de todas las viviendas.' : `Chat de ${membersLabel(curRoom).toLowerCase()}: solo lo veis quienes estáis en él.`} ${admin ? 'Toca un mensaje para borrarlo o bloquear a esa vivienda.' : 'La presidencia modera el chat.'}</span></p>`
+  const intro = (curRoom.junta
+    ? `<p class="note banner">${icon('crown', 16)} <span>Chat privado del presidente y el vicepresidente. Ningún vecino puede verlo. Cuando cambien los cargos, pasará a quienes los ocupen.</span></p>`
+    : `<p class="note banner">${icon('users', 16)} <span>${general ? 'Chat de todas las viviendas.' : `Chat de ${membersLabel(curRoom).toLowerCase()}: solo lo veis quienes estáis en él.`} ${admin ? 'Toca un mensaje para borrarlo o bloquear a esa vivienda.' : 'La presidencia modera el chat.'}</span></p>`)
     + (live && gcall?.room !== curRoom.id ? `<div class="gc-banner">${icon('phone', 18)}<span>Llamada en grupo en curso · ${plural(live, 'persona', 'personas')}</span><button class="done-btn sm-done" type="button" data-gc-join>Unirse</button></div>` : '');
   body.innerHTML = chatMsgs.length || !curRoom.open
     ? messagesHTML(chatMsgs.map((m) => ({
@@ -844,7 +846,7 @@ function renderChat(scroll) {
   loadAttImages(body);
   body.querySelector('[data-gc-join]')?.addEventListener('click', () => chooseGroupCall(curRoom.id));
   const canGroup = canCall() && (!me.blocked || admin);
-  $('view-actions').innerHTML = (canGroup ? `<button class="icon-btn sm" type="button" id="chat-call" aria-label="Llamada de voz en grupo" title="Llamada de voz en grupo">${icon('phone', 18)}</button><button class="icon-btn sm" type="button" id="chat-vcall" aria-label="Videollamada en grupo" title="Videollamada en grupo">${icon('video', 19)}</button>` : '') + (admin
+  $('view-actions').innerHTML = (canGroup ? `<button class="icon-btn sm" type="button" id="chat-call" aria-label="Llamada de voz en grupo" title="Llamada de voz en grupo">${icon('phone', 18)}</button><button class="icon-btn sm" type="button" id="chat-vcall" aria-label="Videollamada en grupo" title="Videollamada en grupo">${icon('video', 19)}</button>` : '') + (admin && !curRoom.junta
     ? `<button class="icon-btn sm" type="button" id="chat-edit" aria-label="Editar el chat" title="Editar el chat">${icon('gear', 18)}</button>
        <button class="icon-btn sm" type="button" id="chat-lock" aria-label="${curRoom.open ? 'Cerrar el chat' : 'Abrir el chat'}" title="${curRoom.open ? 'Cerrar el chat' : 'Abrir el chat'}">${icon(curRoom.open ? 'unlock' : 'lock', 18)}</button>`
     : '');
