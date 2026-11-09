@@ -1,7 +1,7 @@
 'use strict';
 
 // Versión de la app (se ve en Información). Arreglos y ajustes: 0.x.y; novedades: 0.x.0.
-const APP_VERSION = '0.11.1';
+const APP_VERSION = '0.11.2';
 const APP_NAME = 'Mi comunidad';
 // Uso de la app en Vercel Analytics: cada sección cuenta como una página virtual (nunca datos).
 const track = (path) => { try { window.va?.('pageview', { path }); } catch (_) { /* sin analítica */ } };
@@ -1646,8 +1646,8 @@ function renderDM(scroll) {
   const admin = isAdmin();
   const me = st.me;
   const intro = `<p class="note banner">${icon('shield', 16)} <span>${admin
-    ? 'Solo el presidente y el vicepresidente ven esta conversación. Tus respuestas llegan firmadas con tu cargo.'
-    : 'Esta conversación es privada: solo la leen el presidente y el vicepresidente. El resto de vecinos no puede verla.'}</span></p>`;
+    ? 'Solo el presidente y el vicepresidente ven esta conversación. Tus respuestas llegan firmadas con tu cargo. Cuando cambien los cargos, se borrará.'
+    : 'Esta conversación es privada: solo la leen el presidente y el vicepresidente. El resto de vecinos no puede verla. Si cambian los cargos, empezará de nuevo con la nueva presidencia.'}</span></p>`;
   const list = dmMsgs.map((m) => {
     const fromBoard = !!m.byRole;
     const mine = admin ? fromBoard : m.by === me.mid;
@@ -2107,7 +2107,7 @@ function openHandoverSheet() {
     <select class="select" id="ho-pres">${options(cur.pres)}</select>
     <p class="field-label">Vicepresidente</p>
     <select class="select" id="ho-vice">${options(cur.vice, 'Sin vicepresidente')}</select>
-    <p class="small muted">Se publicará un aviso en el tablón con los nuevos cargos. Las conversaciones privadas con los vecinos pasarán a los nuevos cargos y el chat «Presidencia» se borrará.</p>
+    <p class="small muted">Se publicará un aviso en el tablón con los nuevos cargos. Si entra alguien nuevo en los cargos, se borrarán las conversaciones privadas con los vecinos y el chat «Presidencia»; si solo os intercambiáis los cargos, se conservan.</p>
     <p class="form-error" id="ho-err" role="alert"></p>
     <div class="editor-actions"><span></span><button class="done-btn" type="button" id="ho-ok">Confirmar cambio</button></div>`;
   sheet.querySelector('[data-close]').addEventListener('click', closeSheet);

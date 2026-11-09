@@ -191,7 +191,7 @@ const filesNote = (files) => (files.every((f) => /^image\//.test(f.type)) ? `�
 // ya no se muestra.
 // Chat fijo de la presidencia: siempre existe y solo lo ven el presidente y el vicepresidente que haya
 // en cada momento (members vacío: los cargos ven todos los chats). No se puede editar, cerrar ni borrar.
-// Se vacía cuando entra alguien nuevo en los cargos (handover).
+// Se vacía cuando entra alguien nuevo en los cargos (handover), igual que las conversaciones privadas.
 const juntaRoom = () => ({ id: 'junta', name: 'Presidencia', members: [], open: true, junta: true });
 const roomOf = (com, id) => (id === 'junta' ? juntaRoom() : (com.rooms || []).find((r) => r.id === id) || null);
 const canSee = (com, room, mid) => !!room && (isAdmin(com, mid) || (!room.junta && (!room.members || room.members.includes(mid))));
@@ -963,10 +963,13 @@ module.exports = async (req, res) => {
         // Si entra alguien nuevo en los cargos, el chat «Presidencia» empieza vacío (también sus adjuntos)
         const sameTeam = new Set([before.pres, before.vice].filter(Boolean)).size === new Set([pres, vice].filter(Boolean)).size
           && [pres, vice].filter(Boolean).every((m) => m === before.pres || m === before.vice);
+        // y las conversaciones privadas de los vecinos con la presidencia también empiezan de nuevo
         if (!sameTeam) {
-          const old = ((await redis('LRANGE', K.roomChat(cid, 'junta'), 0, -1)) || []).map((m) => JSON.parse(m));
-          const keys = [K.roomChat(cid, 'junta'), K.roomSeq(cid, 'junta'), ...old.flatMap((m) => fileKeys(cid, m.files))];
-          await redis('DEL', ...keys);
+          const mids = Object.keys(com.units);
+          const lists = await pipeline([['LRANGE', K.roomChat(cid, 'junta'), 0, -1], ...mids.map((m) => ['LRANGE', K.dm(cid, m), 0, -1])]);
+          const files = lists.flatMap((l) => (l || []).map((m) => JSON.parse(m)).flatMap((m) => fileKeys(cid, m.files)));
+          const keys = [K.roomChat(cid, 'junta'), K.roomSeq(cid, 'junta'), K.dmIndex(cid), ...mids.map((m) => K.dm(cid, m)), ...files];
+          for (let i = 0; i < keys.length; i += 200) await redis('DEL', ...keys.slice(i, i + 200));
         }
         if (before.pres !== pres || before.vice !== vice) {
           const text = `La presidencia de la comunidad pasa a la vivienda ${com.units[pres].label}${vice ? ` y la vicepresidencia a la vivienda ${com.units[vice].label}` : ''}. Gracias a quienes han ocupado los cargos hasta ahora.`;
