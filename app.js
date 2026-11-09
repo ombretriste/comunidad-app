@@ -1,7 +1,7 @@
 'use strict';
 
 // Versión de la app (se ve en Información). Arreglos y ajustes: 0.x.y; novedades: 0.x.0.
-const APP_VERSION = '0.11.0';
+const APP_VERSION = '0.11.1';
 const APP_NAME = 'Mi comunidad';
 // Uso de la app en Vercel Analytics: cada sección cuenta como una página virtual (nunca datos).
 const track = (path) => { try { window.va?.('pageview', { path }); } catch (_) { /* sin analítica */ } };
@@ -834,7 +834,7 @@ function renderChat(scroll) {
   const general = !curRoom.members;
   const live = roomById(curRoom.id)?.call || 0;
   const intro = (curRoom.junta
-    ? `<p class="note banner">${icon('crown', 16)} <span>Chat privado del presidente y el vicepresidente. Ningún vecino puede verlo. Cuando cambien los cargos, pasará a quienes los ocupen.</span></p>`
+    ? `<p class="note banner">${icon('crown', 16)} <span>Chat privado del presidente y el vicepresidente. Ningún vecino puede verlo. Cuando cambien los cargos, se borrará y los nuevos lo empezarán vacío.</span></p>`
     : `<p class="note banner">${icon('users', 16)} <span>${general ? 'Chat de todas las viviendas.' : `Chat de ${membersLabel(curRoom).toLowerCase()}: solo lo veis quienes estáis en él.`} ${admin ? 'Toca un mensaje para borrarlo o bloquear a esa vivienda.' : 'La presidencia modera el chat.'}</span></p>`)
     + (live && gcall?.room !== curRoom.id ? `<div class="gc-banner">${icon('phone', 18)}<span>Llamada en grupo en curso · ${plural(live, 'persona', 'personas')}</span><button class="done-btn sm-done" type="button" data-gc-join>Unirse</button></div>` : '');
   body.innerHTML = chatMsgs.length || !curRoom.open
@@ -2107,7 +2107,7 @@ function openHandoverSheet() {
     <select class="select" id="ho-pres">${options(cur.pres)}</select>
     <p class="field-label">Vicepresidente</p>
     <select class="select" id="ho-vice">${options(cur.vice, 'Sin vicepresidente')}</select>
-    <p class="small muted">Se publicará un aviso en el tablón con los nuevos cargos. Las conversaciones privadas con la presidencia pasarán a verlas los nuevos cargos.</p>
+    <p class="small muted">Se publicará un aviso en el tablón con los nuevos cargos. Las conversaciones privadas con los vecinos pasarán a los nuevos cargos y el chat «Presidencia» se borrará.</p>
     <p class="form-error" id="ho-err" role="alert"></p>
     <div class="editor-actions"><span></span><button class="done-btn" type="button" id="ho-ok">Confirmar cambio</button></div>`;
   sheet.querySelector('[data-close]').addEventListener('click', closeSheet);

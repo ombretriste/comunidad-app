@@ -191,6 +191,7 @@ const filesNote = (files) => (files.every((f) => /^image\//.test(f.type)) ? `�
 // ya no se muestra.
 // Chat fijo de la presidencia: siempre existe y solo lo ven el presidente y el vicepresidente que haya
 // en cada momento (members vacío: los cargos ven todos los chats). No se puede editar, cerrar ni borrar.
+// Se vacía cuando entra alguien nuevo en los cargos (handover).
 const juntaRoom = () => ({ id: 'junta', name: 'Presidencia', members: [], open: true, junta: true });
 const roomOf = (com, id) => (id === 'junta' ? juntaRoom() : (com.rooms || []).find((r) => r.id === id) || null);
 const canSee = (com, room, mid) => !!room && (isAdmin(com, mid) || (!room.junta && (!room.members || room.members.includes(mid))));
@@ -959,6 +960,14 @@ module.exports = async (req, res) => {
         com.units[pres].blocked = false;
         if (vice) com.units[vice].blocked = false;
         await saveCom();
+        // Si entra alguien nuevo en los cargos, el chat «Presidencia» empieza vacío (también sus adjuntos)
+        const sameTeam = new Set([before.pres, before.vice].filter(Boolean)).size === new Set([pres, vice].filter(Boolean)).size
+          && [pres, vice].filter(Boolean).every((m) => m === before.pres || m === before.vice);
+        if (!sameTeam) {
+          const old = ((await redis('LRANGE', K.roomChat(cid, 'junta'), 0, -1)) || []).map((m) => JSON.parse(m));
+          const keys = [K.roomChat(cid, 'junta'), K.roomSeq(cid, 'junta'), ...old.flatMap((m) => fileKeys(cid, m.files))];
+          await redis('DEL', ...keys);
+        }
         if (before.pres !== pres || before.vice !== vice) {
           const text = `La presidencia de la comunidad pasa a la vivienda ${com.units[pres].label}${vice ? ` y la vicepresidencia a la vivienda ${com.units[vice].label}` : ''}. Gracias a quienes han ocupado los cargos hasta ahora.`;
           await addPost(cid, { title: 'Nuevos cargos de la comunidad', text, by: mid, role: role || 'pres', kind: 'handover' });

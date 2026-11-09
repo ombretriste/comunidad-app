@@ -1,10 +1,10 @@
 # Mi comunidad
 
-App web instalable (PWA) para una comunidad de vecinos. Versión 0.11.0.
+App web instalable (PWA) para una comunidad de vecinos. Versión 0.11.1.
 
 - **Tablón de anuncios**: solo publican el presidente y el vicepresidente; se pueden fijar y borrar.
 - **Contacta con la presidencia**: cada vivienda tiene una conversación privada que solo leen el presidente y el vicepresidente.
-- **Chat «Presidencia»**: fijo, solo para el presidente y el vicepresidente de cada momento (pasa a los nuevos al cambiar los cargos); no se puede editar, cerrar ni borrar.
+- **Chat «Presidencia»**: fijo, solo para el presidente y el vicepresidente de cada momento (al entrar alguien nuevo en los cargos se borra y empieza vacío); no se puede editar, cerrar ni borrar.
 - **Chats de vecinos**: no hay ninguno por defecto; los crean los cargos, para todas las viviendas (también las que se den de alta después) o solo para algunas (p. ej. la comisión de obras). Los cargos están en todos y los moderan: cerrar/abrir, borrar mensajes y bloquear viviendas.
 - **Adjuntos en chats y conversaciones**: fotos (se comprimen a 1600 px) y archivos de hasta 10 MB, cualquier vivienda; se ven dentro de la app. Duran un mes en el servidor.
 - **Llamadas en grupo en los chats** (botón de teléfono para solo voz y de cámara para vídeo, hasta 6 personas, cada móvil conectado con los demás como en MeetCTRL); quien la empieza avisa a los miembros y el chat muestra «Unirse».
