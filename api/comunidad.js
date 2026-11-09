@@ -34,6 +34,7 @@
 //   POST { action: 'units-add', code, labels }            -> { codes: [{ mid, label, code }] }   (solo cargos)
 //   POST { action: 'unit-code' | 'unit-del' | 'req-del', code, … }        (solo cargos)
 //   POST { action: 'unit-rename', code, mid, label }      (solo cargos: cambia el nombre de la vivienda o local)
+//   POST { action: 'unit-rent', code, mid, rented }       (solo cargos: vivienda alquilada → el código se da al propietario)
 //   POST { action: 'codes', code, renew?, device? }       -> { codes: [{ mid, label, code }] }   (cargos: códigos de todas las
 //                                                            viviendas para las tarjetas; renew: genera uno a las que no lo tienen guardado)
 //   POST { action: 'rename', code, name }                 (cargos)
@@ -545,7 +546,7 @@ module.exports = async (req, res) => {
         if (admin) {
           out.threads = Object.entries(idx).filter(([m]) => com.units[m]).map(([m, v]) => ({ mid: m, label: unitName(com, m), ...v })).sort((a, b) => b.t - a.t);
           out.requests = reqs.slice().reverse();
-          out.units = Object.entries(com.units).map(([m, u]) => ({ mid: m, label: u.label, role: roleOf(com, m), blocked: !!u.blocked, issued: u.issued || 0, seen: u.seen || 0, hasCode: !!u.c }))
+          out.units = Object.entries(com.units).map(([m, u]) => ({ mid: m, label: u.label, role: roleOf(com, m), blocked: !!u.blocked, issued: u.issued || 0, seen: u.seen || 0, hasCode: !!u.c, rented: !!u.rented }))
             .sort((a, b) => a.label.localeCompare(b.label, 'es', { numeric: true }));
         }
         return res.status(200).json(out);
@@ -871,7 +872,7 @@ module.exports = async (req, res) => {
           }
           await saveCom();
         }
-        const codes = Object.entries(com.units).filter(([, u]) => u.c).map(([m, u]) => ({ mid: m, label: u.label, code: u.c }))
+        const codes = Object.entries(com.units).filter(([, u]) => u.c).map(([m, u]) => ({ mid: m, label: u.label, code: u.c, rented: !!u.rented }))
           .sort((a, b) => a.label.localeCompare(b.label, 'es', { numeric: true }));
         return res.status(200).json({ codes, missing: Object.values(com.units).filter((u) => !u.c).length });
       }
@@ -886,6 +887,15 @@ module.exports = async (req, res) => {
         const left = reqs.filter((r) => !sameLabel(r.label, com.units[body.mid].label));
         if (left.length !== reqs.length) await setJSON(K.req(cid), left);
         return ok({ code, label: com.units[body.mid].label });
+      }
+      case 'unit-rent': {
+        // Vivienda alquilada: la app recuerda a la presidencia que el código se entrega al propietario, no a los inquilinos
+        if (!admin) return needAdmin();
+        const u = com.units[body.mid];
+        if (!u) return bad('gone', 404);
+        u.rented = !!body.rented;
+        await saveCom();
+        return ok({ rented: u.rented });
       }
       case 'unit-rename': {
         if (!admin) return needAdmin();

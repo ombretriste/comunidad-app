@@ -692,3 +692,8 @@ body.in-call { overflow: hidden; }
 .view-actions { gap: 4px; }
 @media (max-width: 380px) { .view-actions .icon-btn.sm { width: 32px; height: 32px; flex-basis: 32px; } }
 .tile-ico.gold-ico { color: var(--gold); border-color: color-mix(in srgb, var(--gold) 50%, transparent); background: color-mix(in srgb, var(--gold) 12%, transparent); }
+.rent-warn { color: var(--warn) !important; }
+.note.rent-note { border-color: color-mix(in srgb, var(--warn) 50%, var(--line)); }
+.note.rent-note svg { color: var(--warn); }
+.code-item.rented { border-color: color-mix(in srgb, var(--warn) 50%, var(--line)); }
+.code-item b small { display: block; font-size: 10.5px; font-weight: 600; color: var(--warn); }

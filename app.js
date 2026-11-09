@@ -1,7 +1,7 @@
 'use strict';
 
 // Versión de la app (se ve en Información). Arreglos y ajustes: 0.x.y; novedades: 0.x.0.
-const APP_VERSION = '0.11.3';
+const APP_VERSION = '0.12.0';
 const APP_NAME = 'Mi comunidad';
 // Uso de la app en Vercel Analytics: cada sección cuenta como una página virtual (nunca datos).
 const track = (path) => { try { window.va?.('pageview', { path }); } catch (_) { /* sin analítica */ } };
@@ -1854,7 +1854,7 @@ function renderAdmin(body) {
       return `<div class="row">
         <span class="avatar">${esc(r.label)}</span>
         <span class="row-main"><span class="row-top"><b>${esc(r.label)}</b><small>${shortWhen(r.t)}</small></span>
-          <span class="row-sub wrap">${exists ? 'Ya dada de alta: código nuevo' : 'Vivienda nueva'}</span></span>
+          <span class="row-sub wrap ${exists?.rented ? 'rent-warn' : ''}">${exists?.rented ? 'Alquilada: el código, al propietario' : exists ? 'Ya dada de alta: código nuevo' : 'Vivienda nueva'}</span></span>
         <button class="ghost-btn sm-btn" type="button" data-req-ok="${r.id}">Generar</button>
         <button class="icon-btn sm" type="button" data-req-del="${r.id}" aria-label="Descartar">${icon('close', 16)}</button>
       </div>`;
@@ -1866,7 +1866,7 @@ function renderAdmin(body) {
       <button class="row" type="button" data-unit="${u.mid}">
         <span class="avatar ${u.role ? 'gold' : ''}">${esc(u.label)}</span>
         <span class="row-main">
-          <span class="row-top"><b>Vivienda ${esc(u.label)}</b>${u.role ? `<span class="chip gold">${ROLE_NAME[u.role]}</span>` : ''}${u.blocked ? '<span class="chip danger">Bloqueada</span>' : ''}</span>
+          <span class="row-top"><b>Vivienda ${esc(u.label)}</b>${u.role ? `<span class="chip gold">${ROLE_NAME[u.role]}</span>` : ''}${u.rented ? '<span class="chip warn">Alquilada</span>' : ''}${u.blocked ? '<span class="chip danger">Bloqueada</span>' : ''}</span>
           <span class="row-sub">${u.seen ? `Último acceso: ${shortWhen(u.seen)}` : 'Aún no ha entrado'}</span>
         </span>
       </button>`).join('')}</div>
@@ -1895,17 +1895,22 @@ function renderAdmin(body) {
   body.querySelectorAll('[data-req-ok]').forEach((b) => b.addEventListener('click', async () => {
     const r = reqs.find((x) => x.id === b.dataset.reqOk);
     const exists = units.find((u) => sameLabel(u.label, r.label));
+    const go = async () => {
     b.disabled = true;
     try {
       if (exists) {
         const { code, label } = await call('unit-code', { mid: exists.mid, device: pushPref.device });
-        showCodes([{ label, code }]);
+        showCodes([{ mid: exists.mid, label, code }]);
       } else {
         const { codes } = await call('units-add', { labels: [r.label] });
         showCodes(codes);
       }
       refresh();
     } catch (e) { toast(errorText(e)); b.disabled = false; }
+    };
+    // Vivienda alquilada: la solicitud puede venir de los inquilinos; se avisa antes de generar el código
+    if (exists?.rented) confirmSheet({ title: `La vivienda ${exists.label} está alquilada`, text: `La solicitud puede venir de los inquilinos. Entrega el código al propietario, no lo dejes en el buzón.`, ok: 'Generar el código', run: async () => { closeSheet(); await go(); } });
+    else go();
   }));
   body.querySelectorAll('[data-req-del]').forEach((b) => b.addEventListener('click', async () => {
     try { await call('req-del', { id: b.dataset.reqDel }); await refresh(); toast('Solicitud descartada'); } catch (e) { toast(errorText(e)); }
@@ -2006,13 +2011,16 @@ function openUnitsSheet() {
   draw();
 }
 
-// Códigos recién generados: se ven UNA sola vez (el servidor no los guarda legibles)
+// ¿Está alquilada la vivienda de este código? (entonces se entrega al propietario, no en el buzón)
+const codeRented = (c) => !!(c.rented ?? (st?.units || []).find((u) => u.mid === c.mid)?.rented);
+// Códigos recién generados
 function showCodes(codes) {
   const sheet = openSheet('Códigos generados');
   sheet.innerHTML = `
     <div class="sheet-head"><h2 class="sheet-title">${codes.length === 1 ? 'Código generado' : `${codes.length} códigos generados`}</h2></div>
-    <p class="note banner">${icon('info', 16)} <span>Descarga las tarjetas en PDF o anota los códigos ahora: por seguridad no se pueden volver a ver. Si uno se pierde, genera otro desde la vivienda.</span></p>
-    <div class="code-list">${codes.map((c) => `<div class="code-item"><b>${esc(c.label)}</b><code>${esc(c.code)}</code>
+    <p class="note banner">${icon('info', 16)} <span>Descarga las tarjetas en PDF para dejarlas en los buzones. Puedes volver a sacarlas cuando quieras desde Documentos.</span></p>
+    ${codes.some(codeRented) ? `<p class="note banner rent-note">${icon('key', 16)} <span>Alquiladas: ${esc(codes.filter(codeRented).map((c) => c.label).join(', '))}. Entrega su código al propietario, no lo dejes en el buzón (lo recogerían los inquilinos). En su tarjeta lo pone.</span></p>` : ''}
+    <div class="code-list">${codes.map((c) => `<div class="code-item ${codeRented(c) ? 'rented' : ''}"><b>${esc(c.label)}${codeRented(c) ? '<small>Alquilada</small>' : ''}</b><code>${esc(c.code)}</code>
       <button class="icon-btn sm" type="button" data-copy="${esc(c.code)}" aria-label="Copiar">${icon('copy', 16)}</button></div>`).join('')}</div>
     <div class="row-btns end">
       <button class="ghost-btn" type="button" data-copy-all>${icon('copy', 18)} Copiar todos</button>
@@ -2035,7 +2043,9 @@ function openUnitSheet(u) {
     <div class="sheet-head"><h2 class="sheet-title">Vivienda ${esc(u.label)}</h2>
       <button class="icon-btn sm" type="button" data-close aria-label="Cerrar">${icon('close', 18)}</button></div>
     <p class="small muted">${u.role ? `${ROLE_NAME[u.role]} de la comunidad. ` : ''}${u.seen ? `Último acceso: ${when(u.seen)}.` : 'Aún no ha entrado en la app.'}</p>
+    ${u.rented ? `<p class="note banner rent-note">${icon('key', 16)} <span>Está alquilada: entrega el código al propietario, no lo dejes en el buzón (lo recogerían los inquilinos).</span></p>` : ''}
     <div class="stack">
+      <button class="ghost-btn" type="button" data-rent>${icon('home', 18)} ${u.rented ? 'Ya no está alquilada' : 'Marcar como alquilada'}</button>
       <button class="ghost-btn" type="button" data-rename-unit>${icon('edit', 18)} Cambiar el nombre</button>
       <button class="ghost-btn" type="button" data-code>${icon('key', 18)} Generar un código nuevo</button>
       ${u.mid !== st.me.mid ? `<button class="ghost-btn" type="button" data-write>${icon('mail', 18)} Escribir a esta vivienda</button>` : ''}
@@ -2044,16 +2054,25 @@ function openUnitSheet(u) {
     </div>`;
   sheet.querySelector('[data-close]').addEventListener('click', closeSheet);
   sheet.querySelector('[data-code]').addEventListener('click', () => confirmSheet({
-    title: '¿Generar un código nuevo?', text: `El código actual de la vivienda ${u.label} dejará de funcionar en todos los móviles que lo usen${u.mid === st.me.mid ? '; este seguirá dentro con el nuevo' : ''}.`, ok: 'Generar',
+    title: '¿Generar un código nuevo?', text: `El código actual de la vivienda ${u.label} dejará de funcionar en todos los móviles que lo usen${u.mid === st.me.mid ? '; este seguirá dentro con el nuevo' : ''}.${u.rented ? ' Está alquilada: entrega el código nuevo al propietario, no lo dejes en el buzón.' : ''}`, ok: 'Generar',
     run: async () => {
       const { code, label } = await call('unit-code', { mid: u.mid, device: pushPref.device });
       if (u.mid === st.me.mid) { sess.code = code; persist(); }
-      showCodes([{ label, code }]);
+      showCodes([{ mid: u.mid, label, code }]);
       refresh();
     },
   }));
   sheet.querySelector('[data-write]')?.addEventListener('click', () => { closeSheet(); openView('thread', u.mid); });
   sheet.querySelector('[data-rename-unit]').addEventListener('click', () => openUnitRename(u));
+  sheet.querySelector('[data-rent]').addEventListener('click', async () => {
+    try {
+      await call('unit-rent', { mid: u.mid, rented: !u.rented });
+      u.rented = !u.rented;
+      await refresh();
+      openUnitSheet((st.units || []).find((x) => x.mid === u.mid) || u);
+      toast(u.rented ? `Vivienda ${u.label} marcada como alquilada` : `Vivienda ${u.label} ya no figura como alquilada`);
+    } catch (e) { toast(errorText(e)); }
+  });
   sheet.querySelector('[data-block]')?.addEventListener('click', async () => {
     try { await call('block', { mid: u.mid, blocked: !u.blocked }); closeSheet(); await refresh(); toast(u.blocked ? 'Desbloqueada' : 'Bloqueada en el chat'); } catch (e) { toast(errorText(e)); }
   });
@@ -2633,7 +2652,15 @@ const appUrl = () => `${location.host}${location.pathname}`.replace(/\/$/, '');
 
 function pdfCard(pdf, x0, top, w, h, c, info) {
   const cx = x0 + w / 2;
-  let y = top - 24;
+  if (codeRented(c)) {
+    // Recordatorio para quien reparte: esta tarjeta no va al buzón
+    const t1 = 'VIVIENDA ALQUILADA';
+    const t2 = 'Entregar al propietario, no dejar en el buzón';
+    pdf.op(`0.86 0.15 0.15 rg ${fx(x0 + 14)} ${fx(top - 34)} ${fx(w - 28)} 24 re f`);
+    pdf.center(cx, top - 21, t1, 8, 'F2', '1 1 1');
+    pdf.center(cx, top - 30.5, t2, 6.8, 'F1', '1 1 1');
+  }
+  let y = top - (codeRented(c) ? 40 : 24);
   pdfEmblem(pdf, cx - 24, y, 48);
   y -= 64;
   wrapText(info.name.toUpperCase(), 9.5, w - 50, true).slice(0, 2).forEach((l) => { pdf.center(cx, y, l, 9.5, 'F2', NAVY); y -= 12; });
@@ -2656,9 +2683,13 @@ function pdfCard(pdf, x0, top, w, h, c, info) {
     wrapText(text, 9.2, maxW).forEach((l) => { pdf.text(left, y, l, 9.2, 'F1', '0.2 0.21 0.24'); y -= 12; });
     y -= 8;
   };
-  para('Código de tu vivienda, intransferible', 'Pueden usarlo todas las personas que viven en ella, cada una en su móvil: todo lo que hagáis cuenta como la misma vivienda (un solo voto). No lo compartas fuera de casa ni lo publiques.');
+  const rented = codeRented(c);
+  if (rented) para('Código del propietario, intransferible', 'Esta vivienda está alquilada: el código es para el propietario, que es quien vota y recibe la información de la comunidad. No lo compartas ni lo publiques.');
+  else para('Código de tu vivienda, intransferible', 'Pueden usarlo todas las personas que viven en ella, cada una en su móvil: todo lo que hagáis cuenta como la misma vivienda (un solo voto). No lo compartas fuera de casa ni lo publiques.');
   para('Cómo entrar', `Abre ${info.url} en el móvil, pulsa «Ya tengo mi código» y escríbelo. Puedes añadir la app a la pantalla de inicio para tenerla a mano.`);
-  para('¿Lo has perdido o lo has olvidado?', `Vuelve a solicitarlo desde la app en «Solicitar mi código», con el código de la comunidad ${info.pub}. Te dejaremos uno nuevo en tu buzón y el anterior dejará de funcionar.`);
+  para('¿Lo has perdido o lo has olvidado?', rented
+    ? `Pídeselo a la presidencia o solicítalo desde la app con el código de la comunidad ${info.pub}. Te entregaremos uno nuevo y el anterior dejará de funcionar.`
+    : `Vuelve a solicitarlo desde la app en «Solicitar mi código», con el código de la comunidad ${info.pub}. Te dejaremos uno nuevo en tu buzón y el anterior dejará de funcionar.`);
   pdf.center(cx, top - h + 14, `Entregado el ${info.date} · La presidencia`, 6.5, 'F1', GREY);
 }
 function cardsDoc(codes) {
@@ -3252,6 +3283,7 @@ function openAllCards() {
     <div class="sheet-head"><h2 class="sheet-title">Tarjetas de códigos</h2>
       <button class="icon-btn sm" type="button" data-close aria-label="Cerrar">${icon('close', 18)}</button></div>
     <p class="small">Se crea un PDF con la tarjeta de cada vivienda y local (${units.length}), cuatro por página, para recortar y dejar en los buzones.</p>
+    ${units.some((u) => u.rented) ? `<p class="note banner rent-note">${icon('key', 16)} <span>Alquiladas: ${esc(units.filter((u) => u.rented).map((u) => u.label).join(', '))}. Sus tarjetas llevan «Entregar al propietario, no dejar en el buzón».</span></p>` : ''}
     ${missing.length ? `
     <p class="note banner">${icon('info', 16)} <span>${plural(missing.length, 'vivienda no tiene', 'viviendas no tienen')} su código guardado porque se dio de alta antes de esta versión: ${esc(missing.slice(0, 12).map((u) => u.label).join(', '))}${missing.length > 12 ? '…' : ''}.</span></p>
     <label class="check-row"><input type="checkbox" id="ac-renew" /> <span>Generar un código nuevo para ${missing.length === 1 ? 'ella' : 'ellas'} e incluir${missing.length === 1 ? 'la' : 'las'}. Sus códigos actuales dejarán de funcionar y tendrán que entrar con el de la tarjeta nueva.</span></label>` : ''}
