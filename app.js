@@ -1,7 +1,7 @@
 'use strict';
 
 // Versión de la app (se ve en Información). Arreglos y ajustes: 0.x.y; novedades: 0.x.0.
-const APP_VERSION = '0.12.0';
+const APP_VERSION = '0.12.1';
 const APP_NAME = 'Mi comunidad';
 // Uso de la app en Vercel Analytics: cada sección cuenta como una página virtual (nunca datos).
 const track = (path) => { try { window.va?.('pageview', { path }); } catch (_) { /* sin analítica */ } };
@@ -534,6 +534,7 @@ document.addEventListener('visibilitychange', () => {
   if (document.visibilityState !== 'visible') return;
   refresh();
   clearNotifications();
+  resumePush();
   if (view?.tick) view.tick();
 });
 
@@ -2253,6 +2254,8 @@ async function enablePush() {
   if (state === 'unsupported') return toast('Este navegador no admite avisos');
   if (state === 'denied') return openPushHelp();
   track('/avisos-activar');
+  pushPref.wanted = true;
+  save(PUSH_KEY, pushPref);
   // Se pide el permiso lo primero, aún dentro del toque (iOS lo exige)
   const perm = await Notification.requestPermission();
   if (perm !== 'granted') {
@@ -2355,13 +2358,36 @@ function openPushSheet() {
   sheet.querySelector('[data-off]')?.addEventListener('click', () => { closeSheet(); disablePush(); });
   sheet.querySelector('[data-on]')?.addEventListener('click', () => { closeSheet(); enablePush(); });
 }
+// El sistema ya tiene los avisos bloqueados: ninguna web puede volver a preguntar (lo impiden los
+// navegadores); solo se cambia en los ajustes. Al volver a la app con el permiso dado, se activan solos.
 function openPushHelp() {
+  pushPref.wanted = true;
+  save(PUSH_KEY, pushPref);
   const steps = isIOS
-    ? 'En el iPhone: Ajustes › Notificaciones › Mi comunidad › Permitir notificaciones.'
-    : isAndroid
-      ? 'En Android: mantén pulsado el icono de la app › Información de la aplicación › Notificaciones › Permitir. Si la usas en Chrome, toca el candado junto a la dirección › Notificaciones › Permitir.'
-      : 'En el navegador: toca el candado o el icono de ajustes junto a la dirección › Notificaciones › Permitir. Después vuelve a abrir la app.';
-  openNotice('Avisos bloqueados', steps);
+    ? ['Abre Ajustes del iPhone › Notificaciones.', 'Busca «Mi comunidad» y activa «Permitir notificaciones».', 'Vuelve a la app: los avisos se activarán solos.']
+    : isAndroid && isStandalone()
+      ? ['Mantén pulsado el icono de la app › «Información de la aplicación» (o Ajustes › Aplicaciones › Mi comunidad).', 'Entra en «Notificaciones» y actívalas.', 'Vuelve a la app: los avisos se activarán solos.']
+      : isAndroid
+        ? ['En Chrome, toca el icono a la izquierda de la dirección (o ⋮ › Ajustes › Configuración de sitios › Notificaciones).', 'Busca esta web y elige «Permitir».', 'Vuelve a la app: los avisos se activarán solos.']
+        : ['Toca el candado o el icono de ajustes junto a la dirección.', 'En «Notificaciones», elige «Permitir».', 'Vuelve a la app: los avisos se activarán solos.'];
+  const s = openCenter(`
+    <span class="big-ico-sm">${icon('bellOff', 30, 1.4)}</span>
+    <h2 class="sheet-title">Avisos bloqueados</h2>
+    <p class="small">Este móvil tiene bloqueados los avisos de la app (se bloquean si alguna vez se pulsó «Bloquear» o «No permitir»). Por seguridad, una vez bloqueados la app ya no puede volver a preguntar: hay que permitirlos en los ajustes.</p>
+    <ol class="install-steps">${steps.map((t, i) => `<li><span class="step-icon">${i + 1}</span><span>${esc(t)}</span></li>`).join('')}</ol>
+    <div class="center-actions"><button class="done-btn" type="button" data-close>Entendido</button></div>`);
+  s.querySelector('[data-close]').addEventListener('click', closeSheet);
+}
+// Si se pidió activar los avisos y el permiso ya está dado (p. ej. tras cambiarlo en los ajustes), se activan
+async function resumePush() {
+  if (!pushPref.wanted || pushPref.on || !sess.code || !pushSupported() || Notification.permission !== 'granted') return;
+  try {
+    await subscribePush();
+    pushPref.on = true;
+    save(PUSH_KEY, pushPref);
+    toast('Avisos activados');
+    renderHome();
+  } catch (_) { /* se intentará la próxima vez */ }
 }
 function openInstallSheet() {
   const steps = isIOS
@@ -3476,7 +3502,7 @@ else if (linkPub) {
   setTimeout(openRequestSheet, 300);
 }
 if ('serviceWorker' in navigator && window.isSecureContext) {
-  navigator.serviceWorker.register('sw.js').then(refreshPush).catch(() => {});
+  navigator.serviceWorker.register('sw.js').then(() => { refreshPush(); resumePush(); }).catch(() => {});
   navigator.serviceWorker.addEventListener('message', (e) => {
     if (e.data?.type === 'refresh') refresh();
     if (e.data?.type === 'go') { if (st) goTo(e.data.go); else linkGo = e.data.go; }
