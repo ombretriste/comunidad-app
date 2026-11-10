@@ -202,6 +202,15 @@ async function attachFiles(cid, list) {
   await pipeline(keys.map((k) => ['EXPIRE', k, MSG_FILE_TTL_S]));
   return files;
 }
+// Tipo probable de un documento antiguo del tablón, por su título o nombre
+function guessCat(text) {
+  const t = text.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  const rules = [[/\bacta/, 'Actas'], [/presupuest/, 'Presupuestos'], [/convocatoria|junta (general|ordinaria|extraordinaria)/, 'Convocatorias'],
+    [/cuentas|balance|liquidacion|derrama/, 'Cuentas'], [/factura/, 'Facturas'], [/contrato/, 'Contratos'], [/seguro|poliza/, 'Seguros'],
+    [/norma|estatuto|reglamento/, 'Normas'], [/obra|reforma|ascensor|fachada/, 'Obras'], [/comunicado|circular|aviso/, 'Comunicados']];
+  const hit = rules.find(([re]) => re.test(t));
+  return hit ? hit[1] : NO_CAT;
+}
 async function archiveAdd(cid, files, cat, by, post) {
   const docs = await getJSON(K.arch(cid), []);
   const now = Date.now();
@@ -975,6 +984,22 @@ module.exports = async (req, res) => {
       }
       // ----- Archivo de la comunidad -----
       case 'arch-list': {
+        // Una sola vez por comunidad: entran los documentos que ya estaban en el tablón antes del Archivo
+        if (!com.archBackfill) {
+          const board = await getJSON(K.board(cid), []);
+          const old = await getJSON(K.arch(cid), []);
+          const have = new Set(old.map((d) => d.fid));
+          for (const p of board.slice().sort((a, b) => a.t - b.t)) {
+            for (const f of p.files || []) {
+              if (have.has(f.fid)) continue;
+              have.add(f.fid);
+              old.push({ id: randomId(6), ...f, cat: guessCat(`${p.title || ''} ${f.name}`), t: p.t, by: p.by || '', post: p.id });
+            }
+          }
+          await setJSON(K.arch(cid), old.slice(-MAX_ARCH));
+          com.archBackfill = Date.now();
+          await saveCom();
+        }
         const docs = await getJSON(K.arch(cid), []);
         return res.status(200).json({ docs: docs.slice().reverse() });
       }
