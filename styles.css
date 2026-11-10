@@ -697,3 +697,12 @@ body.in-call { overflow: hidden; }
 .note.rent-note svg { color: var(--warn); }
 .code-item.rented { border-color: color-mix(in srgb, var(--warn) 50%, var(--line)); }
 .code-item b small { display: block; font-size: 10.5px; font-weight: 600; color: var(--warn); }
+
+/* ---------- Archivo ---------- */
+.arch-search { font-size: 16px; padding: 11px 14px; }
+.arch-cats { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip-btn { padding: 7px 12px; border: 1px solid var(--line); border-radius: 999px; background: transparent; color: var(--muted); font-size: 13px; font-weight: 600; }
+.chip-btn.on { background: var(--grad-strong); color: #fff; border-color: transparent; }
+.chip-btn.warn:not(.on) { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, transparent); }
+.arch-doc { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.arch-doc .file-chip { flex: 1; background: var(--surface); }

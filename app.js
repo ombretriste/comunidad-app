@@ -1,7 +1,7 @@
 'use strict';
 
 // Versión de la app (se ve en Información). Arreglos y ajustes: 0.x.y; novedades: 0.x.0.
-const APP_VERSION = '0.12.1';
+const APP_VERSION = '0.13.0';
 const APP_NAME = 'Mi comunidad';
 // Uso de la app en Vercel Analytics: cada sección cuenta como una página virtual (nunca datos).
 const track = (path) => { try { window.va?.('pageview', { path }); } catch (_) { /* sin analítica */ } };
@@ -52,6 +52,7 @@ const ICONS = {
   hangup: '<path d="M3 14.5c0-1 .3-1.8 1-2.4 4.5-3.8 11.5-3.8 16 0 .7.6 1 1.4 1 2.4v1.7a1.3 1.3 0 0 1-1.7 1.2l-3-1a1.3 1.3 0 0 1-.9-1.2v-1.9a11 11 0 0 0-6.8 0v1.9c0 .6-.4 1.1-.9 1.2l-3 1A1.3 1.3 0 0 1 3 16.2z"/>',
   mic: '<rect x="9" y="3.5" width="6" height="11" rx="3"/><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v2.5"/>',
   micOff: '<path d="M9 9v2.5a3 3 0 0 0 5 2.2M15 10.5V6.5a3 3 0 0 0-5.6-1.5"/><path d="M5.5 11.5a6.5 6.5 0 0 0 10.6 5M18.5 11.5c0 .7-.1 1.4-.3 2M12 18v2.5"/><path d="M4 4l16 16"/>',
+  archive: '<rect x="3.5" y="4.5" width="17" height="4.5" rx="1"/><path d="M5 9v9.5A1.5 1.5 0 0 0 6.5 20h11a1.5 1.5 0 0 0 1.5-1.5V9"/><path d="M10 13h4"/>',
   zoom: '<circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5l5 5M8 10.5h5M10.5 8v5"/>',
   image: '<rect x="3.5" y="4.5" width="17" height="15" rx="2"/><circle cx="9" cy="10" r="1.8"/><path d="M4 17l5-4.5 4 3.5 2.5-2 4.5 4"/>',
   bell: '<path d="M6 16.5V11a6 6 0 0 1 12 0v5.5l1.5 2h-15z"/><path d="M10 20.5a2 2 0 0 0 4 0"/>',
@@ -541,7 +542,7 @@ document.addEventListener('visibilitychange', () => {
 // ---------- Secciones a pantalla completa ----------
 
 let view = null; // { name, arg, tick?, timer? }
-const VIEW_TITLES = { board: 'Tablón de anuncios', contact: 'Contacta con la presidencia', threads: 'Mensajes de vecinos', thread: '', rooms: 'Chats de vecinos', chat: 'Chat de vecinos', polls: 'Encuestas', admin: 'Gestión de la comunidad' };
+const VIEW_TITLES = { archive: 'Archivo', board: 'Tablón de anuncios', contact: 'Contacta con la presidencia', threads: 'Mensajes de vecinos', thread: '', rooms: 'Chats de vecinos', chat: 'Chat de vecinos', polls: 'Encuestas', admin: 'Gestión de la comunidad' };
 
 function openView(name, arg) {
   if (!st) return;
@@ -560,6 +561,7 @@ function openView(name, arg) {
   if (name === 'chat') startChat(arg);
   else if (name === 'contact' || name === 'thread') startDM(name === 'thread' ? arg : null);
   else renderView();
+  if (name === 'archive') loadArchive();
   $('view-body').scrollTop = 0;
 }
 function closeView(quiet) {
@@ -583,6 +585,7 @@ function renderView() {
   if (view.name === 'board') renderBoard(body);
   else if (view.name === 'polls') renderPolls(body);
   else if (view.name === 'rooms') renderRooms(body);
+  else if (view.name === 'archive') renderArchive(body);
   else if (view.name === 'threads') renderThreads(body);
   else if (view.name === 'admin') renderAdmin(body);
   body.scrollTop = top;
@@ -644,6 +647,12 @@ function openPostSheet() {
     <div class="files" id="po-files"></div>
     <button class="ghost-btn" type="button" id="po-attach">${icon('clip', 18)} Adjuntar archivos (actas, circulares…)</button>
     <input type="file" id="po-input" multiple hidden />
+    <div id="po-catbox" class="stack" hidden>
+      <p class="field-label">Tipo de documento para el Archivo</p>
+      <input class="title-input" id="po-cat" list="po-cats" maxlength="40" placeholder="Por ejemplo: Actas" autocomplete="off" />
+      ${catDatalist('po-cats')}
+      <div class="row-btns">${catList().slice(0, 6).map((c) => `<button class="ghost-btn sm-btn" type="button" data-pick-cat="${esc(c)}">${esc(c)}</button>`).join('')}</div>
+    </div>
     <label class="check-row"><input type="checkbox" id="po-pin" /> <span>Fijarlo arriba del tablón</span></label>
     <p class="form-error" id="po-err" role="alert"></p>
     <div class="editor-actions"><span class="small muted">Firmado como ${ROLE_BOARD[st.me.role]}</span><button class="done-btn" type="button" id="po-ok" disabled>Publicar</button></div>`;
@@ -659,6 +668,7 @@ function openPostSheet() {
       <button class="icon-btn sm" type="button" data-rm="${i}" aria-label="Quitar">${icon('close', 15)}</button></div>`).join('');
     sheet.querySelectorAll('[data-rm]').forEach((b) => b.addEventListener('click', () => { files.splice(Number(b.dataset.rm), 1); drawFiles(); }));
     sheet.querySelector('#po-attach').hidden = files.length >= 5;
+    sheet.querySelector('#po-catbox').hidden = !files.length;
     check();
   };
   [title, text].forEach((i) => i.addEventListener('input', check));
@@ -673,7 +683,17 @@ function openPostSheet() {
     input.value = '';
     drawFiles();
   });
+  sheet.querySelectorAll('[data-pick-cat]').forEach((b) => b.addEventListener('click', () => { sheet.querySelector('#po-cat').value = b.dataset.pickCat; err.textContent = ''; }));
   ok.addEventListener('click', async () => {
+    const cat = sheet.querySelector('#po-cat').value.trim();
+    // Los documentos se guardan también en el Archivo: se avisa si falta el tipo
+    if (files.length && !cat && !ok.dataset.sure) {
+      err.textContent = 'Los documentos se guardarán también en el Archivo. Indica su tipo (Actas, Presupuestos…) o pulsa otra vez para publicar sin tipo.';
+      ok.dataset.sure = '1';
+      ok.textContent = 'Publicar sin tipo';
+      sheet.querySelector('#po-cat').focus();
+      return;
+    }
     ok.disabled = true;
     err.textContent = '';
     try {
@@ -683,7 +703,8 @@ function openPostSheet() {
         metas.push(await uploadFile(f.name, f.type, new Uint8Array(await f.arrayBuffer())));
       }
       ok.textContent = 'Publicando…';
-      await call('post', { title: title.value, text: text.value, pin: sheet.querySelector('#po-pin').checked, files: metas });
+      await call('post', { title: title.value, text: text.value, pin: sheet.querySelector('#po-pin').checked, files: metas, archCat: cat });
+      archDocs = null;
       closeSheet();
       await refresh();
       toast('Anuncio publicado');
@@ -3141,6 +3162,152 @@ async function openFileViewer(f) {
   }
 }
 
+// ----- Archivo de la comunidad -----
+// Actas, presupuestos, convocatorias… ordenados por tipo. Lo consultan todos; solo el presidente y el
+// vicepresidente añaden, clasifican o borran. Los documentos del tablón entran solos.
+const ARCH_CATS = ['Actas', 'Presupuestos', 'Convocatorias', 'Cuentas', 'Contratos', 'Facturas', 'Seguros', 'Normas', 'Obras', 'Comunicados', 'Otros'];
+const NO_CAT = 'Sin clasificar';
+let archDocs = null;  // documentos (se piden al abrir el Archivo)
+let archCat = '';     // tipo elegido para filtrar ('' = todos)
+let archQuery = '';
+const catList = () => [...new Set([...ARCH_CATS, ...(archDocs || []).map((d) => d.cat)])].filter((c) => c && c !== NO_CAT);
+const catDatalist = (id) => `<datalist id="${id}">${catList().map((c) => `<option value="${esc(c)}"></option>`).join('')}</datalist>`;
+async function loadArchive() {
+  try { archDocs = (await call('arch-list')).docs; } catch (_) { archDocs = archDocs || []; }
+  if (view?.name === 'archive') renderArchive($('view-body'));
+}
+function renderArchive(body) {
+  const admin = isAdmin();
+  $('view-sub').textContent = st.community.name;
+  if (!archDocs) { body.innerHTML = '<p class="v-msg" style="text-align:center;color:var(--muted)">Cargando…</p>'; return; }
+  const counts = {};
+  archDocs.forEach((d) => { counts[d.cat] = (counts[d.cat] || 0) + 1; });
+  const cats = Object.keys(counts).sort((a, b) => (a === NO_CAT) - (b === NO_CAT) || a.localeCompare(b, 'es'));
+  if (archCat && !counts[archCat]) archCat = '';
+  body.innerHTML = `
+    ${admin ? `<div class="add-row"><button class="done-btn" type="button" data-arch-add>${icon('plus', 18, 1.8)} Añadir documentos</button></div>` : ''}
+    ${archDocs.length ? `
+    <input class="title-input arch-search" id="arch-q" type="search" placeholder="Buscar por nombre" value="${esc(archQuery)}" autocomplete="off" />
+    <div class="arch-cats">
+      <button type="button" class="chip-btn ${archCat ? '' : 'on'}" data-cat="">Todos · ${archDocs.length}</button>
+      ${cats.map((c) => `<button type="button" class="chip-btn ${archCat === c ? 'on' : ''} ${c === NO_CAT ? 'warn' : ''}" data-cat="${esc(c)}">${esc(c)} · ${counts[c]}</button>`).join('')}
+    </div>
+    ${counts[NO_CAT] && admin ? `<p class="note banner rent-note">${icon('info', 16)} <span>Hay ${plural(counts[NO_CAT], 'documento', 'documentos')} sin tipo. Pulsa ⋮ junto a cada uno para indicar su tipo.</span></p>` : ''}
+    <div class="rows" id="arch-list"></div>`
+    : `<div class="empty"><span class="tile-ico">${icon('archive', 28)}</span><h3>El archivo está vacío</h3><p>${admin ? 'Añade las actas, presupuestos y demás documentos de la comunidad. Los que adjuntes en el tablón entrarán solos.' : 'Aquí estarán las actas, presupuestos y demás documentos de la comunidad.'}</p></div>`}`;
+  body.querySelector('[data-arch-add]')?.addEventListener('click', openArchiveAdd);
+  body.querySelectorAll('[data-cat]').forEach((b) => b.addEventListener('click', () => { archCat = b.dataset.cat; renderArchive(body); }));
+  const q = body.querySelector('#arch-q');
+  q?.addEventListener('input', () => { archQuery = q.value; drawArchiveList(); });
+  drawArchiveList();
+}
+function drawArchiveList() {
+  const list = $('arch-list');
+  if (!list) return;
+  const admin = isAdmin();
+  const norm = (t) => t.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+  const q = norm(archQuery.trim());
+  const docs = archDocs.filter((d) => (!archCat || d.cat === archCat) && (!q || norm(d.name).includes(q) || norm(d.cat).includes(q)));
+  list.innerHTML = docs.length ? docs.map((d) => `
+    <div class="arch-doc">
+      <button class="file-chip" type="button" data-open="${d.id}">${icon(isPdfFile(d) ? 'pdf' : isImageFile(d) ? 'image' : 'clip', 20)}<span><b>${esc(d.name)}</b><small>${esc(d.cat)} · ${shortWhen(d.t)} · ${fmtSize(d.size)}${d.post ? ' · del tablón' : ''}</small></span></button>
+      ${admin ? `<button class="icon-btn sm" type="button" data-doc-menu="${d.id}" aria-label="Opciones del documento">${icon('dots', 18)}</button>` : ''}
+    </div>`).join('') : '<p class="small muted" style="text-align:center;margin:20px 0">No hay documentos con ese filtro.</p>';
+  list.querySelectorAll('[data-open]').forEach((b) => b.addEventListener('click', () => openFileViewer(archDocs.find((d) => d.id === b.dataset.open))));
+  list.querySelectorAll('[data-doc-menu]').forEach((b) => b.addEventListener('click', () => openArchiveDoc(archDocs.find((d) => d.id === b.dataset.docMenu))));
+}
+function openArchiveAdd() {
+  const files = [];
+  const sheet = openSheet('Añadir al archivo');
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.multiple = true;
+  sheet.innerHTML = `
+    <div class="sheet-head"><h2 class="sheet-title">Añadir al archivo</h2>
+      <button class="icon-btn sm" type="button" data-close aria-label="Cerrar">${icon('close', 18)}</button></div>
+    <div class="files" id="ar-files"></div>
+    <button class="ghost-btn" type="button" id="ar-pick">${icon('clip', 18)} Elegir documentos</button>
+    <p class="field-label">Tipo de documento</p>
+    <input class="title-input" id="ar-cat" list="ar-cats" maxlength="40" placeholder="Por ejemplo: Actas" value="${esc(archCat)}" autocomplete="off" />
+    ${catDatalist('ar-cats')}
+    <div class="row-btns">${catList().slice(0, 8).map((c) => `<button class="ghost-btn sm-btn" type="button" data-pick-cat="${esc(c)}">${esc(c)}</button>`).join('')}</div>
+    <p class="form-error" id="ar-err" role="alert"></p>
+    <div class="editor-actions"><span></span><button class="done-btn" type="button" id="ar-ok" disabled>Guardar en el archivo</button></div>`;
+  const ok = sheet.querySelector('#ar-ok');
+  const err = sheet.querySelector('#ar-err');
+  const cat = sheet.querySelector('#ar-cat');
+  const draw = () => {
+    sheet.querySelector('#ar-files').innerHTML = files.map((f, i) => `<div class="file-chip">${icon(/pdf/i.test(f.type) ? 'pdf' : 'clip', 18)}<span><b>${esc(f.name)}</b><small>${fmtSize(f.size)}</small></span>
+      <button class="icon-btn sm" type="button" data-rm="${i}" aria-label="Quitar">${icon('close', 15)}</button></div>`).join('');
+    sheet.querySelectorAll('[data-rm]').forEach((b) => b.addEventListener('click', () => { files.splice(Number(b.dataset.rm), 1); draw(); }));
+    ok.disabled = !files.length;
+  };
+  sheet.querySelector('[data-close]').addEventListener('click', closeSheet);
+  sheet.querySelector('#ar-pick').addEventListener('click', () => input.click());
+  sheet.querySelectorAll('[data-pick-cat]').forEach((b) => b.addEventListener('click', () => { cat.value = b.dataset.pickCat; err.textContent = ''; }));
+  input.addEventListener('change', () => {
+    err.textContent = '';
+    for (const f of input.files) {
+      if (files.length >= 10) { err.textContent = 'Como máximo 10 documentos de cada vez.'; break; }
+      if (f.size > MAX_FILE_BYTES) { err.textContent = `«${f.name}» ocupa más de 10 MB.`; continue; }
+      files.push(f);
+    }
+    input.value = '';
+    draw();
+  });
+  ok.addEventListener('click', async () => {
+    if (!cat.value.trim() && !ok.dataset.sure) {
+      err.textContent = 'No has indicado el tipo de documento. Elige uno o pulsa otra vez para guardarlos como «Sin clasificar».';
+      ok.dataset.sure = '1';
+      ok.textContent = 'Guardar sin tipo';
+      return;
+    }
+    ok.disabled = true;
+    try {
+      const metas = [];
+      for (const [i, f] of files.entries()) {
+        ok.textContent = `Subiendo ${i + 1} de ${files.length}…`;
+        metas.push(await uploadFile(f.name, f.type, new Uint8Array(await f.arrayBuffer())));
+      }
+      for (let i = 0; i < metas.length; i += 5) await call('arch-add', { files: metas.slice(i, i + 5), cat: cat.value.trim() });
+      closeSheet();
+      archCat = cat.value.trim() || NO_CAT;
+      await loadArchive();
+      toast(metas.length === 1 ? 'Documento guardado en el archivo' : `${metas.length} documentos guardados en el archivo`);
+    } catch (e) { err.textContent = errorText(e); ok.disabled = false; ok.textContent = 'Guardar en el archivo'; }
+  });
+}
+function openArchiveDoc(d) {
+  if (!d) return;
+  const sheet = openSheet('Documento');
+  sheet.innerHTML = `
+    <div class="sheet-head"><h2 class="sheet-title">Documento</h2>
+      <button class="icon-btn sm" type="button" data-close aria-label="Cerrar">${icon('close', 18)}</button></div>
+    <p class="field-label">Nombre</p>
+    <input class="title-input" id="ad-name" maxlength="120" value="${esc(d.name)}" autocomplete="off" />
+    <p class="field-label">Tipo de documento</p>
+    <input class="title-input" id="ad-cat" list="ad-cats" maxlength="40" value="${d.cat === NO_CAT ? '' : esc(d.cat)}" placeholder="Por ejemplo: Actas" autocomplete="off" />
+    ${catDatalist('ad-cats')}
+    <div class="row-btns">${catList().slice(0, 8).map((c) => `<button class="ghost-btn sm-btn" type="button" data-pick-cat="${esc(c)}">${esc(c)}</button>`).join('')}</div>
+    ${d.post ? '<p class="small muted">Se añadió desde el tablón de anuncios.</p>' : ''}
+    <p class="form-error" id="ad-err" role="alert"></p>
+    <div class="editor-actions"><button class="ghost-btn danger" type="button" data-del>${icon('trash', 16)} Quitar del archivo</button><button class="done-btn" type="button" data-save>Guardar</button></div>`;
+  sheet.querySelector('[data-close]').addEventListener('click', closeSheet);
+  sheet.querySelectorAll('[data-pick-cat]').forEach((b) => b.addEventListener('click', () => { sheet.querySelector('#ad-cat').value = b.dataset.pickCat; }));
+  sheet.querySelector('[data-save]').addEventListener('click', async () => {
+    try {
+      await call('arch-edit', { id: d.id, name: sheet.querySelector('#ad-name').value, cat: sheet.querySelector('#ad-cat').value });
+      closeSheet();
+      await loadArchive();
+      toast('Documento actualizado');
+    } catch (e) { sheet.querySelector('#ad-err').textContent = errorText(e); }
+  });
+  sheet.querySelector('[data-del]').addEventListener('click', () => confirmSheet({
+    title: '¿Quitar el documento del archivo?', text: d.post ? 'Desaparecerá del archivo, pero seguirá en el anuncio del tablón mientras exista.' : 'Se borrará el documento para todos los vecinos.', ok: 'Quitar', danger: true,
+    run: async () => { await call('arch-del', { id: d.id }); await loadArchive(); toast('Documento quitado del archivo'); },
+  }));
+}
+
 // ----- Plantillas de documentos (parte fija + datos opcionales) -----
 
 const DOCS_KEY = 'micomunidad:docs'; // últimos datos usados en cada plantilla (lugar, localidad, firma…)
@@ -3169,7 +3336,7 @@ function boardMeeting(v, extra = []) {
 const LEGAL_NOTE = 'Se ruega la asistencia puntual. Los propietarios que no puedan asistir podrán delegar su representación por escrito en otra persona. Conforme al artículo 15.2 de la Ley de Propiedad Horizontal, los propietarios que no estén al corriente en el pago de las deudas vencidas con la comunidad podrán participar en las deliberaciones, pero no tendrán derecho a voto.';
 const TEMPLATES = [
   {
-    id: 'app', name: 'Aviso: nueva app de la comunidad', desc: 'Para el portal: enlace bien visible e instrucciones sencillas.', icon: 'home',
+    id: 'app', cat: 'Comunicados', name: 'Aviso: nueva app de la comunidad', desc: 'Para el portal: enlace bien visible e instrucciones sencillas.', icon: 'home',
     fields: [{ k: 'obs', label: 'Texto añadido', type: 'textarea', opt: true }, F.localidad, F.firma],
     build: (v) => ({
       title: 'Nueva app de la comunidad',
@@ -3191,7 +3358,7 @@ const TEMPLATES = [
     }),
   },
   {
-    id: 'ordinaria', name: 'Convocatoria de Junta General Ordinaria', desc: 'Fecha, horas, lugar y orden del día.', icon: 'users',
+    id: 'ordinaria', cat: 'Convocatorias', name: 'Convocatoria de Junta General Ordinaria', desc: 'Fecha, horas, lugar y orden del día.', icon: 'users',
     fields: [F.fecha, F.hora1, F.hora2, F.lugar, { k: 'orden', label: 'Orden del día (un punto por línea)', type: 'textarea', def: ORDER_ORD, rows: 6 }, F.obs, F.deleg, F.localidad, F.firma],
     build: (v) => {
       const d = parseDay(v.fecha);
@@ -3212,7 +3379,7 @@ const TEMPLATES = [
     },
   },
   {
-    id: 'extraordinaria', name: 'Convocatoria de Junta General Extraordinaria', desc: 'Con motivo y orden del día.', icon: 'users',
+    id: 'extraordinaria', cat: 'Convocatorias', name: 'Convocatoria de Junta General Extraordinaria', desc: 'Con motivo y orden del día.', icon: 'users',
     fields: [F.fecha, F.hora1, F.hora2, F.lugar, { k: 'motivo', label: 'Motivo de la convocatoria', type: 'textarea', opt: true }, { k: 'orden', label: 'Orden del día (un punto por línea)', type: 'textarea', def: 'Ruegos y preguntas.', rows: 5 }, F.obs, F.deleg, F.localidad, F.firma],
     build: (v) => {
       const d = parseDay(v.fecha);
@@ -3234,7 +3401,7 @@ const TEMPLATES = [
     },
   },
   {
-    id: 'obras', name: 'Reunión de la comisión de obras', desc: 'Convocatoria con los asuntos a tratar.', icon: 'gear',
+    id: 'obras', cat: 'Obras', name: 'Reunión de la comisión de obras', desc: 'Convocatoria con los asuntos a tratar.', icon: 'gear',
     fields: [F.fecha, F.hora, F.lugar, { k: 'asuntos', label: 'Asuntos a tratar (uno por línea)', type: 'textarea', rows: 5 }, { k: 'miembros', label: 'Miembros convocados', type: 'textarea', opt: true, ph: 'Viviendas 1º A, 3º B…' }, F.obs, F.localidad, F.firma],
     build: (v) => {
       const d = parseDay(v.fecha);
@@ -3269,7 +3436,7 @@ const TEMPLATES = [
     },
   },
   {
-    id: 'comunicado', name: 'Comunicado de la presidencia', desc: 'Texto libre con formato oficial.', icon: 'board',
+    id: 'comunicado', cat: 'Comunicados', name: 'Comunicado de la presidencia', desc: 'Texto libre con formato oficial.', icon: 'board',
     fields: [{ k: 'titulo', label: 'Título', type: 'text', ph: 'Corte de agua el martes' }, { k: 'texto', label: 'Texto', type: 'textarea', rows: 7 }, F.localidad, F.firma],
     build: (v) => ({
       title: v.titulo || 'Comunicado',
@@ -3379,13 +3546,14 @@ function openDocEditor(tpl) {
     if (!spec.board.title && !spec.board.text) { sheet.querySelector('[data-err]').textContent = 'Escribe el contenido.'; return; }
     confirmSheet({
       title: '¿Publicar en el tablón?',
-      text: `Se publicará «${spec.board.title}» para todos los vecinos, con el PDF adjunto, y les llegará un aviso.`,
+      text: `Se publicará «${spec.board.title}» para todos los vecinos, con el PDF adjunto, y les llegará un aviso. El PDF se guardará también en el Archivo, en «${tpl.cat || NO_CAT}».`,
       ok: 'Publicar',
       back: () => openDocEditor(tpl),
       run: async () => {
         const bytes = formalPDF(spec);
         const meta = await uploadFile(fileName(), 'application/pdf', bytes);
-        await call('post', { title: spec.board.title, text: spec.board.text, files: [meta] });
+        await call('post', { title: spec.board.title, text: spec.board.text, files: [meta], archCat: tpl.cat || '' });
+        archDocs = null;
         closeSheet();
         await refresh();
         toast('Publicado en el tablón');
@@ -3399,6 +3567,7 @@ function openDocEditor(tpl) {
 function menuItems() {
   const items = [{ icon: 'palette', label: 'Opciones de visualización', run: openDisplaySheet }];
   if (!sess.code) items.push({ icon: 'mail', label: 'Solicitar mi código', run: openRequestSheet });
+  if (sess.code && st) items.push({ icon: 'archive', label: 'Archivo', run: () => openView('archive') });
   if (sess.code && st && isAdmin()) items.push({ icon: 'pdf', label: 'Documentos', run: openDocsSheet });
   if (sess.code && st) items.push({ icon: pushState() === 'on' ? 'bell' : 'bellOff', label: `Avisos: ${pushState() === 'on' ? 'activados' : 'desactivados'}`, run: openPushSheet });
   if (sess.code && st) items.push({ icon: 'logout', label: 'Salir de esta comunidad', danger: true, run: () => confirmSheet({

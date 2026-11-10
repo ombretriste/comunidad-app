@@ -39,6 +39,10 @@
 //                                                            viviendas para las tarjetas; renew: genera uno a las que no lo tienen guardado)
 //   POST { action: 'rename', code, name }                 (cargos)
 //   POST { action: 'handover', code, pres, vice }         (cargos: nuevos presidente y vicepresidente)
+//   Archivo de la comunidad (actas, presupuestos…): todos lo consultan; solo los cargos añaden, cambian o borran.
+//   POST { action: 'arch-list', code }                    -> { docs: [{ id, fid, parts, name, type, size, cat, t, post? }] }
+//   POST { action: 'arch-add', code, files, cat }         (cargos; los adjuntos del tablón entran solos con body.archCat)
+//   POST { action: 'arch-edit', code, id, cat?, name? }   · POST { action: 'arch-del', code, id }   (cargos)
 //   POST { action: 'icon-set', code, data }              (cargos: icono de la comunidad, JPEG en data URL; '' lo quita)
 //   POST { action: 'icon-get', code }                     -> { data }
 //   POST { action: 'file-put', code, fid, part, parts, data } (cargos: trozo en base64 de un archivo del tablón)
@@ -97,6 +101,8 @@ const MAX_FILES = 5;           // archivos por anuncio
 const UPLOAD_TTL_S = 86400;    // un archivo subido que no llega a publicarse se borra al día
 const MAX_ICON = 160000;       // icono de la comunidad (JPEG pequeño en base64)
 const MAX_ROOMS = 20;          // chats por comunidad
+const MAX_ARCH = 1000;         // documentos en el Archivo
+const NO_CAT = 'Sin clasificar';
 const MSG_FILE_TTL_S = 30 * 86400; // los adjuntos de chats y conversaciones duran un mes
 const GC_MAX = 6;              // participantes en una llamada de grupo: cada uno envía a todos
 const GC_STALE_MS = 15000;     // sin noticias en 15 s, ese participante ya no está
@@ -176,6 +182,7 @@ const K = {
   notes: (d) => `vec:n:${d}`,
   file: (cid, fid, part) => `vec:c:${cid}:f:${fid}:${part}`,
   icon: (cid) => `vec:c:${cid}:icon`,
+  arch: (cid) => `vec:c:${cid}:arch`,
   roomChat: (cid, room) => (room === 'general' ? `vec:c:${cid}:chat` : `vec:c:${cid}:chat:${room}`),
   roomSeq: (cid, room) => (room === 'general' ? `vec:c:${cid}:cs` : `vec:c:${cid}:cs:${room}`),
   calls: (cid, mid) => `vec:c:${cid}:call:${mid}`,
@@ -194,6 +201,15 @@ async function attachFiles(cid, list) {
   if (exists.some((e) => !Number(e))) throw Object.assign(new Error('file-missing'), { code: 'file-missing' });
   await pipeline(keys.map((k) => ['EXPIRE', k, MSG_FILE_TTL_S]));
   return files;
+}
+async function archiveAdd(cid, files, cat, by, post) {
+  const docs = await getJSON(K.arch(cid), []);
+  const now = Date.now();
+  for (const f of files) {
+    if (docs.some((d) => d.fid === f.fid)) continue;
+    docs.push({ id: randomId(6), ...f, cat, t: now, by, ...(post ? { post } : {}) });
+  }
+  await setJSON(K.arch(cid), docs.slice(-MAX_ARCH));
 }
 const filesNote = (files) => (files.every((f) => /^image\//.test(f.type)) ? `📷 ${files.length > 1 ? `${files.length} fotos` : 'Foto'}` : `📎 ${files.length > 1 ? `${files.length} archivos` : files[0].name}`);
 
@@ -366,9 +382,15 @@ async function closePoll(cid, com, poll, by) {
   await addPost(cid, { title: `Resultado de la encuesta: ${poll.q}`, text, by: by || '', role: by ? roleOf(com, by) : 'auto', kind: 'result', poll: poll.id });
   await notify(cid, com, 'all', '', { title: com.name, body: `📊 Resultado de la encuesta «${short(poll.q, 80)}»: ${short(verdict, 90)}`, go: 'board', tag: `poll-${poll.id}` });
 }
+// Archivos del tablón que también están en el Archivo: al borrar el anuncio no se borran
+async function archivedFids(cid) {
+  return new Set((await getJSON(K.arch(cid), [])).map((d) => d.fid));
+}
+const keysNotArchived = (cid, files, keep) => fileKeys(cid, (files || []).filter((f) => !keep.has(f.fid)));
 async function addPost(cid, post) {
   const board = await getJSON(K.board(cid), []);
-  board.push({ id: randomId(6), t: Date.now(), pin: false, ...post });
+  const id = randomId(6);
+  board.push({ id, t: Date.now(), pin: false, ...post });
   // se guardan los últimos KEEP_POSTS, pero los fijados no se pierden
   const gone = [];
   while (board.length > KEEP_POSTS) {
@@ -376,8 +398,12 @@ async function addPost(cid, post) {
     gone.push(...board.splice(i < 0 ? 0 : i, 1));
   }
   await setJSON(K.board(cid), board);
-  const keys = gone.flatMap((p) => fileKeys(cid, p.files));
-  if (keys.length) await redis('DEL', ...keys);
+  if (gone.some((p) => p.files?.length)) {
+    const keep = await archivedFids(cid);
+    const keys = gone.flatMap((p) => keysNotArchived(cid, p.files, keep));
+    if (keys.length) await redis('DEL', ...keys);
+  }
+  return id;
 }
 async function loadPolls(cid, com) {
   const polls = await getJSON(K.polls(cid), []);
@@ -565,7 +591,9 @@ module.exports = async (req, res) => {
           if (exists.some((e) => !Number(e))) return bad('file-missing', 409);
           await pipeline(keys.map((k) => ['PERSIST', k])); // ya forma parte de un anuncio: no caduca
         }
-        await addPost(cid, { title, text, by: mid, role, pin: !!body.pin, ...(files.length ? { files } : {}) });
+        const postId = await addPost(cid, { title, text, by: mid, role, pin: !!body.pin, ...(files.length ? { files } : {}) });
+        // Los documentos del tablón entran solos en el Archivo, con el tipo elegido al publicar
+        if (files.length) await archiveAdd(cid, files, cleanText(body.archCat, 40) || NO_CAT, mid, postId);
         await notify(cid, com, 'all', mid, { title: com.name, body: `📌 ${short(title || text, 120)}`, go: 'board', tag: 'board' });
         return ok();
       }
@@ -579,7 +607,7 @@ module.exports = async (req, res) => {
         if (action === 'post-del') [removed] = board.splice(i, 1);
         else board[i].pin = !!body.pin;
         await setJSON(K.board(cid), board);
-        const keys = removed ? fileKeys(cid, removed.files) : [];
+        const keys = removed?.files?.length ? keysNotArchived(cid, removed.files, await archivedFids(cid)) : [];
         if (keys.length) await redis('DEL', ...keys);
         return ok();
       }
@@ -944,6 +972,41 @@ module.exports = async (req, res) => {
         const data = await redis('GET', K.file(cid, body.fid, Number(body.part) || 0));
         if (!data) return bad('gone', 404);
         return res.status(200).json({ data });
+      }
+      // ----- Archivo de la comunidad -----
+      case 'arch-list': {
+        const docs = await getJSON(K.arch(cid), []);
+        return res.status(200).json({ docs: docs.slice().reverse() });
+      }
+      case 'arch-add': {
+        if (!admin) return needAdmin();
+        const files = cleanFiles(body.files);
+        if (!files.length) return bad();
+        const keys = fileKeys(cid, files);
+        const exists = await pipeline(keys.map((k) => ['EXISTS', k]));
+        if (exists.some((e) => !Number(e))) return bad('file-missing', 409);
+        await pipeline(keys.map((k) => ['PERSIST', k])); // en el Archivo no caducan
+        await archiveAdd(cid, files, cleanText(body.cat, 40) || NO_CAT, mid);
+        return ok();
+      }
+      case 'arch-edit':
+      case 'arch-del': {
+        if (!admin) return needAdmin();
+        const docs = await getJSON(K.arch(cid), []);
+        const i = docs.findIndex((d) => d.id === body.id);
+        if (i < 0) return bad('gone', 404);
+        if (action === 'arch-edit') {
+          if (body.cat !== undefined) docs[i].cat = cleanText(body.cat, 40) || NO_CAT;
+          if (body.name !== undefined && cleanText(body.name, 120)) docs[i].name = cleanText(body.name, 120);
+          await setJSON(K.arch(cid), docs);
+          return ok();
+        }
+        const [d] = docs.splice(i, 1);
+        await setJSON(K.arch(cid), docs);
+        // si el documento sigue en un anuncio del tablón, el archivo se queda para el anuncio
+        const board = await getJSON(K.board(cid), []);
+        if (!board.some((p) => (p.files || []).some((f) => f.fid === d.fid))) await redis('DEL', ...fileKeys(cid, [d]));
+        return ok();
       }
       case 'icon-get': {
         const data = await redis('GET', K.icon(cid));
