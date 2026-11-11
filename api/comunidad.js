@@ -39,6 +39,10 @@
 //                                                            viviendas para las tarjetas; renew: genera uno a las que no lo tienen guardado)
 //   POST { action: 'rename', code, name }                 (cargos)
 //   POST { action: 'handover', code, pres, vice }         (cargos: nuevos presidente y vicepresidente)
+//   Administrador de la app (mantenimiento; no es una vivienda ni firma como presidencia):
+//   POST { action: 'admin-login', pub, clave }            -> { code }   (código de sesión del administrador)
+//   POST { action: 'admin-set', code, clave }             (presidente/vicepresidente lo configuran; el administrador cambia su clave)
+//   POST { action: 'admin-off', code }                    (presidente/vicepresidente lo quitan)
 //   Archivo de la comunidad (actas, presupuestos…): todos lo consultan; solo los cargos añaden, cambian o borran.
 //   POST { action: 'arch-list', code }                    -> { docs: [{ id, fid, parts, name, type, size, cat, t, post? }] }
 //   POST { action: 'arch-add', code, files, cat }         (cargos; los adjuntos del tablón entran solos con body.archCat)
@@ -231,8 +235,8 @@ const filesNote = (files) => (files.every((f) => /^image\//.test(f.type)) ? `�
 // Se vacía cuando entra alguien nuevo en los cargos (handover), igual que las conversaciones privadas.
 const juntaRoom = () => ({ id: 'junta', name: 'Presidencia', members: [], open: true, junta: true });
 const roomOf = (com, id) => (id === 'junta' ? juntaRoom() : (com.rooms || []).find((r) => r.id === id) || null);
-const canSee = (com, room, mid) => !!room && (isAdmin(com, mid) || (!room.junta && (!room.members || room.members.includes(mid))));
-const visibleRooms = (com, mid) => [...(isAdmin(com, mid) ? [juntaRoom()] : []), ...(com.rooms || []).filter((r) => canSee(com, r, mid))];
+const canSee = (com, room, mid) => !!room && (room.junta ? isJunta(com, mid) : (isAdmin(com, mid) || !room.members || room.members.includes(mid)));
+const visibleRooms = (com, mid) => [...(isJunta(com, mid) ? [juntaRoom()] : []), ...(com.rooms || []).filter((r) => canSee(com, r, mid))];
 
 // Servidores para conectar las llamadas: STUN siempre; TURN (Cloudflare) si Vercel tiene
 // CF_TURN_KEY_ID y CF_TURN_API_TOKEN: con datos móviles suele hacer falta para que conecten.
@@ -348,7 +352,22 @@ async function limited(key, max, seconds) {
   return Number(n) > max;
 }
 
-const roleOf = (com, mid) => (com.pres === mid ? 'pres' : com.vice === mid ? 'vice' : '');
+// Administrador de la app: identificador propio que nunca coincide con una vivienda (las viviendas usan 10 cifras hex)
+const ADMIN_MID = 'admin';
+const roleOf = (com, mid) => (mid === ADMIN_MID ? (com.admin ? 'admin' : '') : com.pres === mid ? 'pres' : com.vice === mid ? 'vice' : '');
+const isJunta = (com, mid) => com.pres === mid || com.vice === mid; // presidente o vicepresidente (no el administrador)
+// Clave del administrador: PBKDF2-SHA256 con sal propia; nunca se guarda la clave
+async function hashClave(clave, salt) {
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(clave), 'PBKDF2', false, ['deriveBits']);
+  const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt: new TextEncoder().encode(salt), iterations: 120000 }, key, 256);
+  return [...new Uint8Array(bits)].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+function sameHexStr(a, b) {
+  if (typeof a !== 'string' || typeof b !== 'string' || a.length !== b.length) return false;
+  let d = 0;
+  for (let i = 0; i < a.length; i++) d |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return d === 0;
+}
 const isAdmin = (com, mid) => !!roleOf(com, mid);
 
 // Asigna un código nuevo a una vivienda (el anterior deja de valer)
@@ -435,7 +454,7 @@ function pollView(p, com, mid) {
     result: p.closed ? p.result : admin ? live : null,
   };
 }
-const unitName = (com, mid) => (com.units[mid] ? com.units[mid].label : 'Vivienda eliminada');
+const unitName = (com, mid) => (mid === ADMIN_MID ? 'Administración' : com.units[mid] ? com.units[mid].label : 'Vivienda eliminada');
 
 module.exports = async (req, res) => {
   res.setHeader('Cache-Control', 'no-store');
@@ -514,6 +533,35 @@ module.exports = async (req, res) => {
       return res.status(200).json({ ok: true, name: com.name });
     }
 
+    // Acceso del administrador de la app: código de la comunidad + su clave. Da un código de sesión nuevo
+    // (el anterior deja de valer: solo una sesión de administrador a la vez).
+    if (action === 'admin-login') {
+      const failIp = `vec:rl:afail:${ipKey}`;
+      if ((Number(await redis('GET', failIp)) || 0) >= 10) return bad('too-many', 429);
+      const pub = normCode(body.pub);
+      const cid = pub.length === PUB_LEN ? await redis('GET', K.pub(pub)) : null;
+      const com = cid && await loadCom(cid);
+      const clave = String(body.clave || '');
+      const failCom = cid ? `vec:rl:afailc:${cid}` : '';
+      if (failCom && (Number(await redis('GET', failCom)) || 0) >= 30) return bad('too-many', 429);
+      const good = com && com.admin && clave.length >= 8 && clave.length <= 128 && sameHexStr(await hashClave(clave, com.admin.salt), com.admin.key);
+      if (!good) {
+        const cmds = [['INCR', failIp], ['EXPIRE', failIp, 900, 'NX']];
+        if (failCom) cmds.push(['INCR', failCom], ['EXPIRE', failCom, 3600, 'NX']);
+        await pipeline(cmds);
+        return bad('bad-clave', 401);
+      }
+      const code = randomCode(CODE_LEN);
+      const h = await codeHash(code);
+      const cmds = [['SET', K.code(h), `${cid}:${ADMIN_MID}`]];
+      if (com.admin.h) cmds.push(['DEL', K.code(com.admin.h)]);
+      await pipeline(cmds);
+      com.admin.h = h;
+      com.admin.seen = Date.now();
+      await setJSON(K.com(cid), com);
+      return res.status(200).json({ code: fmtCode(code), name: com.name });
+    }
+
     // ---------- Con el código de la vivienda ----------
     const failKey = `vec:rl:fail:${ipKey}`;
     if ((Number(await redis('GET', failKey)) || 0) >= MAX_FAILS) return bad('too-many', 429);
@@ -521,11 +569,12 @@ module.exports = async (req, res) => {
     const link = norm.length === CODE_LEN ? await redis('GET', K.code(await codeHash(norm))) : null;
     const [cid, mid] = String(link || '').split(':');
     const com = link && await loadCom(cid);
-    if (!com || !com.units[mid]) {
+    const isAdm = mid === ADMIN_MID;
+    if (!com || (isAdm ? !com.admin : !com.units[mid])) {
       await pipeline([['INCR', failKey], ['EXPIRE', failKey, 900, 'NX']]);
       return bad('bad-code', 401);
     }
-    const me = com.units[mid];
+    const me = isAdm ? Object.assign(com.admin, { label: 'Administración', blocked: false }) : com.units[mid];
     const role = roleOf(com, mid);
     const admin = !!role; // presidente y vicepresidente tienen los mismos permisos
     const saveCom = () => setJSON(K.com(cid), com);
@@ -582,6 +631,7 @@ module.exports = async (req, res) => {
         if (admin) {
           out.threads = Object.entries(idx).filter(([m]) => com.units[m]).map(([m, v]) => ({ mid: m, label: unitName(com, m), ...v })).sort((a, b) => b.t - a.t);
           out.requests = reqs.slice().reverse();
+          out.adminApp = com.admin ? { set: com.admin.set || 0, seen: com.admin.seen || 0 } : null;
           out.units = Object.entries(com.units).map(([m, u]) => ({ mid: m, label: u.label, role: roleOf(com, m), blocked: !!u.blocked, issued: u.issued || 0, seen: u.seen || 0, hasCode: !!u.c, rented: !!u.rented }))
             .sort((a, b) => a.label.localeCompare(b.label, 'es', { numeric: true }));
         }
@@ -863,6 +913,7 @@ module.exports = async (req, res) => {
         return ok();
       }
       case 'poll-vote': {
+        if (isAdm) return bad('forbidden', 403); // el administrador no es una vivienda: no vota
         const polls = await loadPolls(cid, com);
         const p = polls.find((x) => x.id === body.id);
         if (!p) return bad('gone', 404);
@@ -1067,6 +1118,25 @@ module.exports = async (req, res) => {
         com.iconV = data ? Date.now() : 0;
         await saveCom();
         return ok({ v: com.iconV });
+      }
+      case 'admin-set': {
+        // Presidente o vicepresidente configuran el acceso; el propio administrador puede cambiar su clave
+        if (!isJunta(com, mid) && !isAdm) return needAdmin();
+        const clave = String(body.clave || '');
+        if (clave.length < 8 || clave.length > 128) return bad('weak');
+        const salt = randomId(16);
+        com.admin = { ...(com.admin || {}), salt, key: await hashClave(clave, salt), set: Date.now(), by: isAdm ? ADMIN_MID : mid };
+        delete com.admin.label;
+        delete com.admin.blocked;
+        await saveCom();
+        return ok();
+      }
+      case 'admin-off': {
+        if (!isJunta(com, mid)) return needAdmin();
+        if (com.admin?.h) await redis('DEL', K.code(com.admin.h));
+        delete com.admin;
+        await saveCom();
+        return ok();
       }
       case 'rename': {
         if (!admin) return needAdmin();

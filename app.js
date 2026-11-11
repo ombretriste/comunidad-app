@@ -1,7 +1,7 @@
 'use strict';
 
 // Versión de la app (se ve en Información). Arreglos y ajustes: 0.x.y; novedades: 0.x.0.
-const APP_VERSION = '0.15.0';
+const APP_VERSION = '0.16.0';
 const APP_NAME = 'Mi comunidad';
 // Uso de la app en Vercel Analytics: cada sección cuenta como una página virtual (nunca datos).
 const track = (path) => { try { window.va?.('pageview', { path }); } catch (_) { /* sin analítica */ } };
@@ -100,8 +100,8 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 const WEEKDAYS = ['dom', 'lun', 'mar', 'mié', 'jue', 'vie', 'sáb'];
 const MONTHS = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
-const ROLE_NAME = { pres: 'Presidente', vice: 'Vicepresidente', auto: 'Automático' };
-const ROLE_BOARD = { pres: 'Presidencia', vice: 'Vicepresidencia', auto: 'Aviso automático' };
+const ROLE_NAME = { pres: 'Presidente', vice: 'Vicepresidente', admin: 'Administrador', auto: 'Automático' };
+const ROLE_BOARD = { pres: 'Presidencia', vice: 'Vicepresidencia', admin: 'Administración de la app', auto: 'Aviso automático' };
 
 function load(key, fallback) {
   try { const raw = localStorage.getItem(key); return raw ? JSON.parse(raw) : fallback; } catch (_) { return fallback; }
@@ -187,6 +187,8 @@ function errorText(e) {
     past: 'La fecha de cierre debe ser futura.',
     gone: 'Ya no existe.',
     'not-configured': 'El servidor aún no tiene base de datos configurada.',
+    'bad-clave': 'El código de la comunidad o la clave no son correctos.',
+    weak: 'La clave debe tener al menos 8 caracteres.',
     full: 'La llamada está llena (máximo 6 personas).',
     'too-many-rooms': 'Se ha llegado al máximo de chats.',
     'label-taken': 'Ya hay una vivienda o local con ese nombre.',
@@ -258,7 +260,7 @@ function renderHome() {
   const admin = !!me.role;
   const newPosts = st.board.filter((p) => p.t > sess.seen.board && p.by !== me.mid).length;
   const openPolls = st.polls.filter((p) => !p.closed);
-  const pendingVotes = openPolls.filter((p) => p.mine === null).length;
+  const pendingVotes = me.role === 'admin' ? 0 : openPolls.filter((p) => p.mine === null).length; // el administrador no vota
   const rooms = st.rooms || [];
   const chatNew = rooms.filter(roomUnread).length;
   const dmNew = !admin && st.dm && st.dm.from === 'junta' && st.dm.t > sess.seen.dm;
@@ -270,10 +272,10 @@ function renderHome() {
   home.innerHTML = `
     ${offline ? `<p class="offline">${icon('info', 16)} Sin conexión: datos de la última visita</p>` : ''}
     <section class="card hello">
-      <span class="unit-badge">${esc(me.label)}</span>
+      <span class="unit-badge">${me.role === 'admin' ? icon('key', 24, 1.6) : esc(me.label)}</span>
       <div class="hello-text">
-        <small>Vivienda ${esc(me.label)}</small>
-        <b>¡Hola, vecino!</b>
+        <small>${me.role === 'admin' ? 'Administrador de la app' : `Vivienda ${esc(me.label)}`}</small>
+        <b>${me.role === 'admin' ? '¡Hola!' : '¡Hola, vecino!'}</b>
         ${admin ? `<span class="role-chip">${icon('crown', 13, 1.6)} ${ROLE_NAME[me.role]}</span>` : ''}
       </div>
     </section>
@@ -355,9 +357,11 @@ function renderWelcome(home) {
         <button class="done-btn" type="button" id="code-ok" disabled>Entrar</button>
       </div>
     </section>
-    <div class="footer-links"><button class="link-btn" type="button" id="create-btn">¿Eres el presidente? Crea una comunidad nueva</button></div>`;
+    <div class="footer-links stack" style="align-items:center;gap:2px"><button class="link-btn" type="button" id="create-btn">¿Eres el presidente? Crea una comunidad nueva</button>
+      <button class="link-btn muted-link" type="button" id="admin-btn">Acceso de administrador</button></div>`;
   $('req-btn').addEventListener('click', openRequestSheet);
   $('create-btn').addEventListener('click', openCreateSheet);
+  $('admin-btn').addEventListener('click', openAdminLogin);
   const input = $('code-input');
   const ok = $('code-ok');
   input.addEventListener('input', () => {
@@ -442,6 +446,69 @@ function openRequestSheet() {
     }
   });
   setTimeout(() => (pub.value ? label : pub).focus(), 60);
+}
+
+// ---------- Administrador de la app ----------
+// No es una vivienda: entra con el código de la comunidad y una clave que configura la presidencia.
+function openAdminLogin() {
+  track('/acceso-administrador');
+  const sheet = openSheet('Acceso de administrador');
+  sheet.innerHTML = `
+    <div class="sheet-head"><h2 class="sheet-title">Acceso de administrador</h2>
+      <button class="icon-btn sm" type="button" data-close aria-label="Cerrar">${icon('close', 18)}</button></div>
+    <p class="small muted">Para quien mantiene la app de una comunidad con la clave que le ha configurado la presidencia.</p>
+    <p class="field-label">Código de la comunidad</p>
+    <input class="title-input code-input" id="al-pub" maxlength="6" placeholder="6 letras" autocomplete="off" autocapitalize="characters" spellcheck="false" />
+    <p class="field-label">Clave de administrador</p>
+    <input class="title-input" id="al-clave" type="password" maxlength="128" autocomplete="current-password" />
+    <p class="form-error" id="al-err" role="alert"></p>
+    <button class="done-btn big" type="button" id="al-ok">Entrar</button>`;
+  sheet.querySelector('[data-close]').addEventListener('click', closeSheet);
+  const pub = sheet.querySelector('#al-pub');
+  pub.addEventListener('input', () => { pub.value = pub.value.toUpperCase().replace(/[^0-9A-Z]/g, ''); });
+  sheet.querySelector('#al-ok').addEventListener('click', async () => {
+    const ok = sheet.querySelector('#al-ok');
+    ok.disabled = true;
+    try {
+      const { code } = await api('admin-login', { pub: pub.value, clave: sheet.querySelector('#al-clave').value });
+      const state = await api('state', { code });
+      login(code, state);
+      offline = false;
+      closeSheet();
+      renderHome();
+      startPolling();
+      toast(`Has entrado como administrador de ${state.community.name}`);
+    } catch (e) { sheet.querySelector('#al-err').textContent = errorText(e); ok.disabled = false; }
+  });
+  setTimeout(() => pub.focus(), 60);
+}
+function openAdminSet() {
+  const self = st.me.role === 'admin';
+  const sheet = openSheet('Clave de administrador');
+  sheet.innerHTML = `
+    <div class="sheet-head"><h2 class="sheet-title">${self ? 'Cambiar mi clave' : st.adminApp ? 'Nueva clave del administrador' : 'Configurar administrador'}</h2>
+      <button class="icon-btn sm" type="button" data-close aria-label="Cerrar">${icon('close', 18)}</button></div>
+    ${self ? '' : '<p class="small muted">Escribe la clave que te indique la persona que va a mantener la app (puede cambiarla después). Entrará desde «Acceso de administrador», en la pantalla de inicio, con el código de la comunidad y esta clave.</p>'}
+    <p class="field-label">Clave (al menos 8 caracteres)</p>
+    <input class="title-input" id="as-1" type="password" maxlength="128" autocomplete="new-password" />
+    <p class="field-label">Repite la clave</p>
+    <input class="title-input" id="as-2" type="password" maxlength="128" autocomplete="new-password" />
+    <p class="form-error" id="as-err" role="alert"></p>
+    <div class="editor-actions"><span></span><button class="done-btn" type="button" id="as-ok">Guardar</button></div>`;
+  sheet.querySelector('[data-close]').addEventListener('click', closeSheet);
+  sheet.querySelector('#as-ok').addEventListener('click', async () => {
+    const a = sheet.querySelector('#as-1').value;
+    const err = sheet.querySelector('#as-err');
+    if (a.length < 8) { err.textContent = 'La clave debe tener al menos 8 caracteres.'; return; }
+    if (a !== sheet.querySelector('#as-2').value) { err.textContent = 'Las dos claves no coinciden.'; return; }
+    try {
+      await call('admin-set', { clave: a });
+      closeSheet();
+      await refresh();
+      toast(self ? 'Clave cambiada' : 'Administrador configurado');
+    } catch (e) { err.textContent = errorText(e); }
+  });
+  setTimeout(() => sheet.querySelector('#as-1').focus(), 60);
 }
 
 function openCreateSheet() {
@@ -1742,7 +1809,7 @@ function renderPolls(body) {
             const n = r ? r.counts[i] : 0;
             const pct = r && r.total ? Math.round((n / r.total) * 100) : 0;
             const win = p.closed && r && r.total && n === max;
-            return `<button class="opt ${p.mine === i ? 'on' : ''} ${win ? 'win' : ''}" type="button" data-opt="${i}" ${p.closed ? 'disabled' : ''} style="--w:${r ? pct : 0}%">
+            return `<button class="opt ${p.mine === i ? 'on' : ''} ${win ? 'win' : ''}" type="button" data-opt="${i}" ${p.closed || st.me.role === 'admin' ? 'disabled' : ''} style="--w:${r ? pct : 0}%">
               ${r ? '<span class="bar"></span>' : ''}
               ${p.closed ? '' : '<span class="radio"></span>'}<span class="opt-text">${esc(o)}</span>
               ${r ? `<span class="opt-count">${n} · ${pct} %</span>` : ''}
@@ -1901,6 +1968,18 @@ function renderAdmin(body) {
       <div class="row-top"><span class="muted small" style="flex:1">Vicepresidente</span><b style="flex:0 0 auto">${viceU ? `Vivienda ${esc(viceU.label)}` : 'Sin nombrar'}</b></div>
       <p class="small muted">El presidente y el vicepresidente tienen los mismos permisos. Al terminar el mandato, asigna los cargos a las viviendas nuevas: si tu vivienda no queda en ningún cargo, dejarás de tener permisos en cuanto lo confirmes.</p>
       <button class="ghost-btn" type="button" data-handover>${icon('crown', 18)} Modificar presidente y vicepresidente</button>
+    </section>
+
+    <p class="section-title">Administrador de la app</p>
+    <section class="card stack">
+      ${st.me.role === 'admin'
+    ? `<p class="small">Has entrado como administrador de la app. Puedes mantener la app (tablón, chats, encuestas, viviendas y códigos, documentos), firmando como «Administración de la app». No votas ni ves el chat «Presidencia».</p>
+      <button class="ghost-btn" type="button" data-admin-set>${icon('key', 18)} Cambiar mi clave</button>`
+    : st.adminApp
+      ? `<p class="small">Hay un administrador configurado${st.adminApp.seen ? ` · último acceso: ${when(st.adminApp.seen)}` : ' · aún no ha entrado'}. Entra con el código de la comunidad (${esc(st.community.pub)}) y su clave desde «Acceso de administrador», en la pantalla de inicio.</p>
+      <div class="row-btns"><button class="ghost-btn sm-btn" type="button" data-admin-set>${icon('key', 15)} Cambiar la clave</button><button class="ghost-btn sm-btn danger" type="button" data-admin-off>${icon('trash', 15)} Quitar el administrador</button></div>`
+      : `<p class="small muted">Un vecino de confianza puede mantener la app con una clave propia, por ejemplo si el presidente y el vicepresidente pierden sus códigos. Puede publicar y gestionar, pero firma como «Administración de la app», no vota ni ve el chat «Presidencia».</p>
+      <button class="ghost-btn" type="button" data-admin-set>${icon('key', 18)} Configurar administrador</button>`}
     </section>`;
 
   body.querySelector('[data-rename]')?.addEventListener('click', openRenameSheet);
@@ -1942,6 +2021,11 @@ function renderAdmin(body) {
   body.querySelector('[data-add-units]').addEventListener('click', openUnitsSheet);
   body.querySelectorAll('[data-unit]').forEach((b) => b.addEventListener('click', () => openUnitSheet(units.find((u) => u.mid === b.dataset.unit))));
   body.querySelector('[data-handover]')?.addEventListener('click', openHandoverSheet);
+  body.querySelector('[data-admin-set]')?.addEventListener('click', openAdminSet);
+  body.querySelector('[data-admin-off]')?.addEventListener('click', () => confirmSheet({
+    title: '¿Quitar el administrador?', text: 'Su clave dejará de funcionar y, si tiene la app abierta, saldrá.', ok: 'Quitar', danger: true,
+    run: async () => { await call('admin-off'); await refresh(); toast('Administrador quitado'); },
+  }));
 }
 const sameLabel = (a, b) => a.toLowerCase().replace(/[\s.ºª°-]/g, '') === b.toLowerCase().replace(/[\s.ºª°-]/g, '');
 

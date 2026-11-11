@@ -729,3 +729,4 @@ body.in-call { overflow: hidden; }
 .acta-punto { display: grid; gap: 6px; padding: 10px; border: 1px solid var(--line); border-radius: 14px; }
 .punto-n { flex: 0 0 auto; font-weight: 700; color: var(--accent); }
 .tipo-sel { font-size: 14px; padding: 10px 12px; }
+.link-btn.muted-link { color: var(--muted); font-size: 13px; font-weight: 400; }
