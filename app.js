@@ -1,7 +1,7 @@
 'use strict';
 
 // Versión de la app (se ve en Información). Arreglos y ajustes: 0.x.y; novedades: 0.x.0.
-const APP_VERSION = '0.19.0';
+const APP_VERSION = '0.20.0';
 const APP_NAME = 'Mi comunidad';
 // Uso de la app en Vercel Analytics: cada sección cuenta como una página virtual (nunca datos).
 const track = (path) => { try { window.va?.('pageview', { path }); } catch (_) { /* sin analítica */ } };
@@ -1800,6 +1800,11 @@ function renderPolls(body) {
   const card = (p) => {
     const r = p.result;
     const max = r ? Math.max(...r.counts) : 0;
+    const need = Math.ceil(p.units / 2);
+    // Encuestas cerradas desde la 0.20.0: aprobada solo con más del 50 % de los votos y quórum
+    const verdict = !p.closed || !r?.rule ? ''
+      : r.approved ? `<p class="poll-verdict ok">${icon('check', 16, 1.8)} Aprobada: «${esc(r.approved)}»</p>`
+      : `<p class="poll-verdict no">${icon('close', 16, 1.8)} No se aprueba: ${!r.total ? 'no ha votado nadie' : !r.quorum ? `no hay quórum (hacía falta que votaran ${r.need})` : 'ninguna opción supera el 50 % de los votos'}</p>`;
     return `
       <article class="card poll" data-poll="${p.id}">
         <div class="poll-meta">
@@ -1813,7 +1818,7 @@ function renderPolls(body) {
           ${p.opts.map((o, i) => {
             const n = r ? r.counts[i] : 0;
             const pct = r && r.total ? Math.round((n / r.total) * 100) : 0;
-            const win = p.closed && r && r.total && n === max;
+            const win = p.closed && r && (r.rule ? r.approved === o : r.total && n === max);
             return `<button class="opt ${p.mine === i ? 'on' : ''} ${win ? 'win' : ''}" type="button" data-opt="${i}" ${p.closed || st.me.role === 'admin' ? 'disabled' : ''} style="--w:${r ? pct : 0}%">
               ${r ? '<span class="bar"></span>' : ''}
               ${p.closed ? '' : '<span class="radio"></span>'}<span class="opt-text">${esc(o)}</span>
@@ -1821,7 +1826,8 @@ function renderPolls(body) {
             </button>`;
           }).join('')}
         </div>
-        <p class="small muted">${p.closed ? `Han votado ${p.result.total} de ${p.result.units} viviendas.` : `${plural(p.voters, 'vivienda ha', 'viviendas han')} votado de ${p.units}.${p.mine !== null ? ' Puedes cambiar tu voto mientras esté abierta.' : ''}${admin ? ' El recuento solo lo veis los cargos hasta que se cierre.' : ' El resultado se publicará en el tablón al cerrarse.'}`}</p>
+        ${verdict}
+        <p class="small muted">${p.closed ? `Han votado ${r.total} de ${r.units} viviendas${r.rule ? ` (quórum: ${r.need})` : ''}.` : `${plural(p.voters, 'vivienda ha', 'viviendas han')} votado de ${p.units} · quórum: ${need}${p.voters >= need ? ' (alcanzado)' : ''}. Se aprueba la opción con más del 50 % de los votos si votan al menos ${need} viviendas.${p.mine !== null ? ' Puedes cambiar tu voto mientras esté abierta.' : ''}${admin ? ' El recuento solo lo veis los cargos hasta que se cierre.' : ' El resultado se publicará en el tablón al cerrarse.'}`}</p>
         ${admin ? `<div class="post-actions">
           ${p.closed ? '' : `<button class="ghost-btn sm-btn" type="button" data-close-poll="${p.id}">${icon('lock', 15)} Cerrar y publicar resultado</button>`}
           <button class="ghost-btn sm-btn danger" type="button" data-del-poll="${p.id}">${icon('trash', 15)} Eliminar</button>
@@ -1873,7 +1879,7 @@ function openPollSheet() {
       ${opts.length < 10 ? `<button class="ghost-btn" type="button" data-add>${icon('plus', 16)} Añadir opción</button>` : ''}
       <p class="opt-label">Cierre automático (opcional)</p>
       <input class="title-input" id="pl-closes" type="datetime-local" value="${esc(closes)}" />
-      <p class="small muted">Al cerrarse (en esa fecha o cuando la cierres tú) el resultado se publica en el tablón. Cada vivienda tiene un voto y el voto es secreto.</p>
+      <p class="small muted">Al cerrarse (en esa fecha o cuando la cierres tú) el resultado se publica en el tablón. Cada vivienda tiene un voto y el voto es secreto. Una opción se aprueba si tiene más del 50 % de los votos y ha votado al menos la mitad de las viviendas (quórum).</p>
       <p class="form-error" id="pl-err" role="alert"></p>
       <div class="editor-actions"><span></span><button class="done-btn" type="button" id="pl-ok">Publicar encuesta</button></div>`;
     sheet.querySelector('[data-close]').addEventListener('click', closeSheet);
@@ -4232,6 +4238,7 @@ const HELP_ALL = [
   ] },
   { icon: 'poll', title: 'Encuestas', items: [
     'La presidencia propone una pregunta con varias opciones. Cada vivienda tiene <b>un voto</b> y es <b>secreto</b>: nadie puede ver qué ha votado cada vivienda.',
+    'Para que una opción se <b>apruebe</b> hacen falta dos cosas: que tenga <b>más del 50 % de los votos</b> y que vote <b>al menos la mitad de las viviendas</b> (quórum). Si no, la encuesta se cierra como «No se aprueba».',
     'Algunas encuestas tienen fecha de cierre. Al cerrarse, el resultado se publica en el tablón.',
   ] },
   { icon: 'archive', title: 'Archivo', items: [

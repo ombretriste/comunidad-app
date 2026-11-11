@@ -1,6 +1,6 @@
 # Mi comunidad
 
-App web instalable (PWA) para una comunidad de vecinos. Versión 0.19.0.
+App web instalable (PWA) para una comunidad de vecinos. Versión 0.20.0.
 
 - **Tablón de anuncios**: solo publican el presidente y el vicepresidente; se pueden fijar y borrar.
 - **Contacta con la presidencia**: cada vivienda tiene una conversación privada que solo leen el presidente y el vicepresidente. Se borra cuando entra alguien nuevo en los cargos (no si solo se intercambian).
@@ -9,7 +9,7 @@ App web instalable (PWA) para una comunidad de vecinos. Versión 0.19.0.
 - **Adjuntos en chats y conversaciones**: fotos (se comprimen a 1600 px) y archivos de hasta 10 MB, cualquier vivienda; se ven dentro de la app. Duran un mes en el servidor.
 - **Llamadas en grupo en los chats** (botón de teléfono para solo voz y de cámara para vídeo, hasta 6 personas, cada móvil conectado con los demás como en MeetCTRL); quien la empieza avisa a los miembros y el chat muestra «Unirse».
 - **Llamadas con la presidencia** (voz y vídeo, WebRTC como en ChatCTRL) desde «Contacta con la presidencia» y, para los cargos, desde cada conversación. Con datos móviles hace falta TURN: variables `CF_TURN_KEY_ID` y `CF_TURN_API_TOKEN` (Cloudflare) en Vercel; `GET /api/comunidad` dice `turn: ok | sin-claves`.
-- **Encuestas**: las crean los cargos con las opciones que quieran y cierre opcional por fecha. Un voto secreto por vivienda. Al cerrarse, el resultado se publica solo en el tablón.
+- **Encuestas**: las crean los cargos con las opciones que quieran y cierre opcional por fecha. Un voto secreto por vivienda. Una opción se aprueba solo si tiene más del 50 % de los votos emitidos y vota al menos la mitad de las viviendas (quórum); si no, «No se aprueba». Al cerrarse, el resultado se publica solo en el tablón.
 - **Gestión** (cargos): nombre e **icono de la comunidad** (el icono sale en la app y en todos los PDF), código público de la comunidad, solicitudes de código, alta de viviendas y locales (por plantas con puertas A/B/C/D, Izquierda/Derecha o Izquierda/Centro/Derecha, bajos y locales, o una por línea), cambio de nombre de una vivienda o local (sin cambiar su código), marca de vivienda alquilada (avisa de entregar el código al propietario y lo pone en su tarjeta), nuevo código, bloqueo y baja de viviendas, y **cambio de presidente y vicepresidente**. El presidente y el vicepresidente tienen exactamente los mismos permisos.
 - **Administrador de la app**: un vecino de confianza para mantener la app. La presidencia lo configura en Gestión con una clave (PBKDF2 en el servidor, ≥8 caracteres; el administrador puede cambiarla). Entra con el código de la comunidad + su clave desde «Acceso de administrador» (una sesión a la vez; 10 intentos fallidos por IP/15 min y 30 por comunidad/h). Tiene los permisos de gestión, firma como «Administración de la app», no vota, no es una vivienda y no ve el chat «Presidencia».
 - **Tarjetas de códigos en PDF** para el buzón (4 por A4): icono y nombre de la comunidad, vivienda, código, aviso de que es personal e intransferible y cómo volver a pedirlo desde la app.

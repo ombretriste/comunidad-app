@@ -752,3 +752,6 @@ body.in-call { overflow: hidden; }
 .help-sec[open] .help-chev { transform: rotate(45deg); }
 .help-sec ul { margin: 0; padding: 0 16px 14px 34px; display: grid; gap: 8px; font-size: 14px; line-height: 1.5; }
 .help-sec li b { font-weight: 500; }
+.poll-verdict { display: flex; align-items: center; gap: 8px; margin: 2px 0 0; font-size: 15px; font-weight: 500; }
+.poll-verdict.ok { color: var(--ok); }
+.poll-verdict.no { color: var(--danger); }

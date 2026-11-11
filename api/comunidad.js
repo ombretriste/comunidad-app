@@ -402,17 +402,26 @@ function pollResult(poll, com) {
   const total = counts.reduce((a, b) => a + b, 0);
   const max = Math.max(0, ...counts);
   const winners = max > 0 ? poll.opts.filter((_, i) => counts[i] === max) : [];
-  return { counts, total, units: Object.keys(com.units).length, winners };
+  const units = Object.keys(com.units).length;
+  // Para aprobarse, una opción necesita más del 50 % de los votos emitidos y que vote al menos
+  // la mitad de las viviendas (quórum)
+  const need = Math.ceil(units / 2);
+  const quorum = total > 0 && total >= need;
+  const top = counts.findIndex((n) => n * 2 > total);
+  const majority = top >= 0 ? poll.opts[top] : '';
+  return { counts, total, units, winners, need, quorum, majority, approved: quorum && majority ? majority : '', rule: 1 };
 }
 async function closePoll(cid, com, poll, by) {
   poll.closed = Date.now();
   poll.result = pollResult(poll, com);
   const r = poll.result;
   const lines = poll.opts.map((o, i) => `• ${o}: ${r.counts[i]} ${r.counts[i] === 1 ? 'voto' : 'votos'}${r.total ? ` (${Math.round((r.counts[i] / r.total) * 100)} %)` : ''}`);
-  const verdict = !r.total ? 'No ha votado nadie.'
-    : r.winners.length === 1 ? `Opción más votada: «${r.winners[0]}».`
-    : `Empate entre ${r.winners.map((w) => `«${w}»`).join(' y ')}.`;
-  const text = `${verdict}\n\n${lines.join('\n')}\n\nHan votado ${r.total} de ${r.units} viviendas.`;
+  const most = r.winners.length === 1 ? `la más votada es «${r.winners[0]}»` : `empate entre ${r.winners.map((w) => `«${w}»`).join(' y ')}`;
+  const verdict = !r.total ? 'No ha votado nadie: no se aprueba ninguna opción.'
+    : r.approved ? `Aprobada: «${r.approved}», con más del 50 % de los votos y quórum suficiente.`
+    : !r.quorum ? `No se aprueba: no hay quórum (han votado ${r.total} de ${r.units} viviendas y hacía falta al menos ${r.need}).`
+    : `No se aprueba: ninguna opción supera el 50 % de los votos (${most}).`;
+  const text = `${verdict}\n\n${lines.join('\n')}\n\nHan votado ${r.total} de ${r.units} viviendas (quórum: ${r.need}). Para aprobarse, una opción necesita más del 50 % de los votos y que vote al menos la mitad de las viviendas.`;
   await addPost(cid, { title: `Resultado de la encuesta: ${poll.q}`, text, by: by || '', role: by ? roleOf(com, by) : 'auto', kind: 'result', poll: poll.id });
   await notify(cid, com, 'all', '', { title: com.name, body: `📊 Resultado de la encuesta «${short(poll.q, 80)}»: ${short(verdict, 90)}`, go: 'board', tag: `poll-${poll.id}` });
 }
