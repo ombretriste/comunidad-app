@@ -1,5 +1,5 @@
 // Cambia la versión al modificar archivos para que los móviles descarguen la nueva versión
-const CACHE = 'micomunidad-v32';
+const CACHE = 'micomunidad-v33';
 const ASSETS = [
   './',
   'index.html',

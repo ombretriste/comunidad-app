@@ -1,7 +1,7 @@
 'use strict';
 
 // Versión de la app (se ve en Información). Arreglos y ajustes: 0.x.y; novedades: 0.x.0.
-const APP_VERSION = '0.16.0';
+const APP_VERSION = '0.17.0';
 const APP_NAME = 'Mi comunidad';
 // Uso de la app en Vercel Analytics: cada sección cuenta como una página virtual (nunca datos).
 const track = (path) => { try { window.va?.('pageview', { path }); } catch (_) { /* sin analítica */ } };
@@ -2944,18 +2944,22 @@ function formalDoc(spec) {
       paragraph(b.text, { x: ML + 16, width: CW - 16, after: 12 });
     } else if (b.t === 'sign2') {
       // Dos firmas: visto bueno del presidente y secretario
-      if (y - 90 < 44) header();
-      y -= 56;
+      const tall = b.leftImg || b.rightImg;
+      if (y - (tall ? 120 : 90) < 44) header();
+      y -= tall ? 82 : 56;
+      pdfSignature(pdf, b.leftImg, ML + 100, y + 16);
+      pdfSignature(pdf, b.rightImg, PAGE_W - ML - 100, y + 16);
       pdf.op(`${GREY} RG 0.6 w ${fx(ML)} ${fx(y + 14)} m ${fx(ML + 200)} ${fx(y + 14)} l S ${fx(PAGE_W - ML - 200)} ${fx(y + 14)} m ${fx(PAGE_W - ML)} ${fx(y + 14)} l S`);
       pdf.center(ML + 100, y, b.left, BODY, 'F2', INK);
       pdf.center(PAGE_W - ML - 100, y, b.right, BODY, 'F2', INK);
       y -= 24;
     } else if (b.t === 'close') {
-      if (y - 72 < 44) header(); // la firma puede bajar algo más que el texto, hasta encima del pie
+      if (y - (b.img ? 120 : 72) < 44) header(); // la firma puede bajar algo más que el texto, hasta encima del pie
       y -= 8;
       const when = `${b.place ? `En ${b.place}, a` : 'A'} ${plainDate(new Date())}.`;
       pdf.right(PAGE_W - ML, y, when, BODY, 'F1', INK);
-      y -= 46;
+      y -= b.img ? 94 : 46;
+      pdfSignature(pdf, b.img, PAGE_W - ML - 100, y + 16);
       pdf.op(`${GREY} RG 0.6 w ${fx(PAGE_W - ML - 200)} ${fx(y + 14)} m ${fx(PAGE_W - ML)} ${fx(y + 14)} l S`);
       pdf.center(PAGE_W - ML - 100, y, b.sign || 'La Presidencia', BODY, 'F2', INK);
       y -= 24;
@@ -3688,6 +3692,13 @@ function openDocEditor(tpl) {
     <div class="sheet-head"><h2 class="sheet-title">${esc(tpl.name)}</h2>
       <button class="icon-btn sm" type="button" data-close aria-label="Cerrar">${icon('close', 18)}</button></div>
     ${tpl.fields.map(fieldHTML).join('')}
+    ${tpl.noBoard ? '' : (() => {
+    const sig = load(SIG_KEY, null);
+    const use = (load(DOCS_KEY, {}) || {})._sig !== false;
+    return `<p class="field-label">Firma</p>
+    <div class="sig-box">${sig ? `${sigThumb(sig)}<label class="check-row"><input type="checkbox" data-usesig ${use ? 'checked' : ''} /> <span>Poner mi firma en el documento</span></label>` : '<p class="small muted">Puedes firmar en pantalla con el dedo; la firma se guarda solo en este móvil.</p>'}
+      <button class="ghost-btn sm-btn" type="button" data-sign>${icon('edit', 15)} ${sig ? 'Volver a firmar' : 'Firmar en pantalla'}</button></div>`;
+  })()}
     <p class="form-error" data-err role="alert"></p>
     <div class="row-btns end">
       ${tpl.noBoard ? '' : `<button class="ghost-btn" type="button" data-board>${icon('board', 18)} Publicar en el tablón</button>`}
@@ -3704,14 +3715,25 @@ function openDocEditor(tpl) {
     return v;
   };
   const fileName = () => `${slugify(tpl.name)}-${isoDay(new Date())}.pdf`;
+  sheet.querySelector('[data-sign]')?.addEventListener('click', () => {
+    read(); // los datos escritos se guardan antes de abrir el recuadro
+    openSignaturePad('Tu firma', (sig) => { save(SIG_KEY, sig); const all = load(DOCS_KEY, {}) || {}; all._sig = true; save(DOCS_KEY, all); openDocEditor(tpl); }, () => openDocEditor(tpl));
+  });
+  sheet.querySelector('[data-usesig]')?.addEventListener('change', (e) => { const all = load(DOCS_KEY, {}) || {}; all._sig = e.target.checked; save(DOCS_KEY, all); });
+  // Firma guardada en este móvil, si se ha elegido ponerla
+  const withSig = (spec) => {
+    const sig = load(SIG_KEY, null);
+    if (sig && sheet.querySelector('[data-usesig]')?.checked) spec.blocks.forEach((b) => { if (b.t === 'close') b.img = sig; });
+    return spec;
+  };
   sheet.querySelector('[data-pdf]').addEventListener('click', async () => {
-    const spec = tpl.build(read());
+    const spec = withSig(tpl.build(read()));
     track(`/documento/${tpl.id}`);
     try { await openPdfViewer(formalDoc(spec), fileName()); } catch (e) { sheet.querySelector('[data-err]').textContent = 'No se ha podido crear el PDF.'; }
   });
   sheet.querySelector('[data-board]')?.addEventListener('click', () => {
     const v = read();
-    const spec = tpl.build(v);
+    const spec = withSig(tpl.build(v));
     if (!spec.board.title && !spec.board.text) { sheet.querySelector('[data-err]').textContent = 'Escribe el contenido.'; return; }
     confirmSheet({
       title: '¿Publicar en el tablón?',
@@ -3730,6 +3752,83 @@ function openDocEditor(tpl) {
     });
   });
 }
+
+// ---------- Firma en pantalla ----------
+// Recuadro para firmar con el dedo. Se recorta a lo dibujado y se guarda como JPEG sobre blanco
+// ({ d: dataURL, w, h }) para poder ponerla en los PDF.
+const SIG_KEY = 'micomunidad:firma'; // la firma de quien usa este móvil (solo aquí)
+function openSignaturePad(title, done, back) {
+  const s = openCenter(`
+    <h2 class="sheet-title">${esc(title)}</h2>
+    <p class="small muted">Firma con el dedo dentro del recuadro.</p>
+    <canvas class="sig-pad" width="900" height="380" aria-label="Recuadro para firmar"></canvas>
+    <div class="center-actions"><button class="ghost-btn" type="button" data-clear>${icon('trash', 16)} Borrar</button><button class="ghost-btn" type="button" data-no>Cancelar</button><button class="done-btn" type="button" data-ok disabled>Usar esta firma</button></div>`);
+  s.parentElement.onclick = null; // un toque fuera no cierra mientras se firma
+  const c = s.querySelector('canvas');
+  const g = c.getContext('2d');
+  const blank = () => { g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height); g.strokeStyle = '#d0d5dd'; g.lineWidth = 2; g.beginPath(); g.moveTo(40, c.height - 70); g.lineTo(c.width - 40, c.height - 70); g.stroke(); };
+  blank();
+  let box = null;
+  let last = null;
+  const pt = (e) => { const r = c.getBoundingClientRect(); return { x: (e.clientX - r.left) * (c.width / r.width), y: (e.clientY - r.top) * (c.height / r.height) }; };
+  const grow = (p) => { box = box ? { x0: Math.min(box.x0, p.x), y0: Math.min(box.y0, p.y), x1: Math.max(box.x1, p.x), y1: Math.max(box.y1, p.y) } : { x0: p.x, y0: p.y, x1: p.x, y1: p.y }; };
+  c.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    try { c.setPointerCapture(e.pointerId); } catch (_) { /* sin captura */ }
+    last = pt(e);
+    grow(last);
+    g.fillStyle = '#0b1730';
+    g.beginPath(); g.arc(last.x, last.y, 2.6, 0, Math.PI * 2); g.fill();
+  });
+  c.addEventListener('pointermove', (e) => {
+    if (!last) return;
+    const p = pt(e);
+    g.strokeStyle = '#0b1730';
+    g.lineWidth = 5.5;
+    g.lineCap = 'round';
+    g.lineJoin = 'round';
+    g.beginPath();
+    g.moveTo(last.x, last.y);
+    g.quadraticCurveTo(last.x, last.y, (last.x + p.x) / 2, (last.y + p.y) / 2);
+    g.lineTo(p.x, p.y);
+    g.stroke();
+    last = p;
+    grow(p);
+    s.querySelector('[data-ok]').disabled = false;
+  });
+  const up = () => { last = null; };
+  c.addEventListener('pointerup', up);
+  c.addEventListener('pointercancel', up);
+  s.querySelector('[data-clear]').addEventListener('click', () => { blank(); box = null; s.querySelector('[data-ok]').disabled = true; });
+  s.querySelector('[data-no]').addEventListener('click', () => { closeSheet(); back?.(); });
+  s.querySelector('[data-ok]').addEventListener('click', () => {
+    // Recorte a lo firmado, con un margen, sobre fondo blanco (sin la línea guía)
+    const pad = 14;
+    const x0 = Math.max(0, Math.floor(box.x0 - pad)); const y0 = Math.max(0, Math.floor(box.y0 - pad));
+    const x1 = Math.min(c.width, Math.ceil(box.x1 + pad)); const y1 = Math.min(c.height, Math.ceil(box.y1 + pad));
+    const out = document.createElement('canvas');
+    out.width = x1 - x0;
+    out.height = y1 - y0;
+    const o = out.getContext('2d');
+    o.drawImage(c, x0, y0, out.width, out.height, 0, 0, out.width, out.height);
+    // la línea guía es gris clara: se limpia a blanco
+    const img = o.getImageData(0, 0, out.width, out.height);
+    for (let i = 0; i < img.data.length; i += 4) if (img.data[i] > 180 && img.data[i + 1] > 180) { img.data[i] = img.data[i + 1] = img.data[i + 2] = 255; }
+    o.putImageData(img, 0, 0);
+    closeSheet();
+    done({ d: out.toDataURL('image/jpeg', 0.9), w: out.width, h: out.height });
+  });
+}
+// Firma dibujada en un PDF: encajada en una caja, con su base sobre la línea de la firma
+function pdfSignature(pdf, sig, cx, baseY, maxW = 170, maxH = 58) {
+  if (!sig?.d) return;
+  const k = Math.min(maxW / sig.w, maxH / sig.h);
+  const w = sig.w * k;
+  const h = sig.h * k;
+  const name = pdf.addImage(b64ToBytes(sig.d.split(',')[1]), sig.w, sig.h);
+  pdf.op(`q ${fx(w)} 0 0 ${fx(h)} ${fx(cx - w / 2)} ${fx(baseY)} cm /${name} Do Q`);
+}
+const sigThumb = (sig) => (sig?.d ? `<img class="sig-thumb" src="${sig.d}" alt="Firma" />` : '');
 
 // ---------- Acta de reunión (cargos) ----------
 // Formulario a pantalla completa: tipo de junta, fecha, hora, lugar, asistentes (presente / representado),
@@ -3874,6 +3973,17 @@ function renderActa(body) {
       <input class="title-input" type="time" data-f="fin" value="${esc(acta.fin)}" />
     </section>
 
+    <section class="card stack">
+      <p class="label">Firmas</p>
+      <p class="small muted">Se pueden firmar en pantalla con el dedo al terminar la reunión. Se guardan con este borrador.</p>
+      <div class="sig-pair">
+        <div class="sig-box">${sigThumb(acta.sigP) || '<span class="small muted">Sin firmar</span>'}<b class="small">Vº Bº El Presidente</b>
+          <div class="row-btns"><button class="ghost-btn sm-btn" type="button" data-sig="sigP">${icon('edit', 15)} ${acta.sigP ? 'Repetir' : 'Firmar'}</button>${acta.sigP ? `<button class="icon-btn sm" type="button" data-unsig="sigP" aria-label="Quitar la firma">${icon('close', 15)}</button>` : ''}</div></div>
+        <div class="sig-box">${sigThumb(acta.sigS) || '<span class="small muted">Sin firmar</span>'}<b class="small">${acta.secretario.trim() ? 'El/La Secretario/a' : 'El Secretario'}</b>
+          <div class="row-btns"><button class="ghost-btn sm-btn" type="button" data-sig="sigS">${icon('edit', 15)} ${acta.sigS ? 'Repetir' : 'Firmar'}</button>${acta.sigS ? `<button class="icon-btn sm" type="button" data-unsig="sigS" aria-label="Quitar la firma">${icon('close', 15)}</button>` : ''}</div></div>
+      </div>
+    </section>
+
     <p class="form-error" id="acta-err" role="alert"></p>
     <div class="row-btns end">
       <button class="ghost-btn danger" type="button" data-reset>${icon('trash', 16)} Empezar de nuevo</button>
@@ -3911,6 +4021,11 @@ function renderActa(body) {
   }));
   body.querySelectorAll('[data-rm-pt]').forEach((b) => b.addEventListener('click', () => { acta.puntos.splice(Number(b.dataset.rmPt), 1); saveActa(); const top = body.scrollTop; renderActa(body); body.scrollTop = top; }));
   body.querySelector('[data-add-pt]').addEventListener('click', () => { acta.puntos.push({ titulo: '', texto: '' }); saveActa(); const top = body.scrollTop; renderActa(body); body.scrollTop = top; body.querySelector(`[data-pt="${acta.puntos.length - 1}"]`)?.focus(); });
+  body.querySelectorAll('[data-sig]').forEach((b) => b.addEventListener('click', () => {
+    const k = b.dataset.sig;
+    openSignaturePad(k === 'sigP' ? 'Firma del Presidente' : 'Firma del Secretario', (sig) => { acta[k] = sig; saveActa(); const top = body.scrollTop; renderActa(body); body.scrollTop = top; });
+  }));
+  body.querySelectorAll('[data-unsig]').forEach((b) => b.addEventListener('click', () => { acta[b.dataset.unsig] = null; saveActa(); const top = body.scrollTop; renderActa(body); body.scrollTop = top; }));
   body.querySelector('[data-reset]').addEventListener('click', () => confirmSheet({
     title: '¿Empezar un acta nueva?', text: 'Se borrará el borrador de este móvil.', ok: 'Empezar de nuevo', danger: true,
     run: async () => { save(ACTA_KEY, null); acta = null; openActa(); },
@@ -3956,7 +4071,7 @@ function actaSpec() {
     ...acta.puntos.filter((p) => p.titulo.trim() || p.texto.trim()).map((p, i) => ({ t: 'point', n: i + 1, title: p.titulo.trim() || 'Punto sin título', text: p.texto.trim() || 'Sin acuerdos que hacer constar.' })),
     ...(acta.libre.trim() ? [{ t: 'h', text: 'Otros asuntos y observaciones' }, { t: 'p', text: acta.libre.trim() }] : []),
     { t: 'p', text: `Y no habiendo más asuntos que tratar, se levanta la sesión${acta.fin ? ` siendo las ${acta.fin} horas` : ''}, de lo que como secretario/a doy fe, con el visto bueno del Presidente.` },
-    { t: 'sign2', left: 'Vº Bº El Presidente', right: acta.secretario.trim() ? 'El/La Secretario/a' : 'El Secretario' },
+    { t: 'sign2', left: 'Vº Bº El Presidente', right: acta.secretario.trim() ? 'El/La Secretario/a' : 'El Secretario', leftImg: acta.sigP, rightImg: acta.sigS },
   ];
   return { title: `Acta de la ${tipo}`, subtitle: d ? plainDate(d) : '', blocks };
 }

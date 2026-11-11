@@ -730,3 +730,10 @@ body.in-call { overflow: hidden; }
 .punto-n { flex: 0 0 auto; font-weight: 700; color: var(--accent); }
 .tipo-sel { font-size: 14px; padding: 10px 12px; }
 .link-btn.muted-link { color: var(--muted); font-size: 13px; font-weight: 400; }
+
+/* ---------- Firma en pantalla ---------- */
+.sig-pad { width: 100%; max-width: 520px; aspect-ratio: 900 / 380; height: auto; border-radius: 14px; background: #fff; touch-action: none; border: 1px solid var(--line); cursor: crosshair; }
+.sig-box { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding: 10px; border: 1px dashed var(--line); border-radius: 14px; }
+.sig-thumb { max-width: 200px; max-height: 70px; background: #fff; border-radius: 8px; padding: 4px; }
+.sig-pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.sig-pair .sig-box { align-items: center; text-align: center; }
