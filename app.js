@@ -1,7 +1,7 @@
 'use strict';
 
 // Versión de la app (se ve en Información). Arreglos y ajustes: 0.x.y; novedades: 0.x.0.
-const APP_VERSION = '0.13.1';
+const APP_VERSION = '0.14.0';
 const APP_NAME = 'Mi comunidad';
 // Uso de la app en Vercel Analytics: cada sección cuenta como una página virtual (nunca datos).
 const track = (path) => { try { window.va?.('pageview', { path }); } catch (_) { /* sin analítica */ } };
@@ -52,6 +52,7 @@ const ICONS = {
   hangup: '<path d="M3 14.5c0-1 .3-1.8 1-2.4 4.5-3.8 11.5-3.8 16 0 .7.6 1 1.4 1 2.4v1.7a1.3 1.3 0 0 1-1.7 1.2l-3-1a1.3 1.3 0 0 1-.9-1.2v-1.9a11 11 0 0 0-6.8 0v1.9c0 .6-.4 1.1-.9 1.2l-3 1A1.3 1.3 0 0 1 3 16.2z"/>',
   mic: '<rect x="9" y="3.5" width="6" height="11" rx="3"/><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v2.5"/>',
   micOff: '<path d="M9 9v2.5a3 3 0 0 0 5 2.2M15 10.5V6.5a3 3 0 0 0-5.6-1.5"/><path d="M5.5 11.5a6.5 6.5 0 0 0 10.6 5M18.5 11.5c0 .7-.1 1.4-.3 2M12 18v2.5"/><path d="M4 4l16 16"/>',
+  grip: '<path d="M5 8h14M5 12h14M5 16h14"/>',
   archive: '<rect x="3.5" y="4.5" width="17" height="4.5" rx="1"/><path d="M5 9v9.5A1.5 1.5 0 0 0 6.5 20h11a1.5 1.5 0 0 0 1.5-1.5V9"/><path d="M10 13h4"/>',
   zoom: '<circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5l5 5M8 10.5h5M10.5 8v5"/>',
   image: '<rect x="3.5" y="4.5" width="17" height="15" rx="2"/><circle cx="9" cy="10" r="1.8"/><path d="M4 17l5-4.5 4 3.5 2.5-2 4.5 4"/>',
@@ -3192,6 +3193,7 @@ function renderArchive(body) {
       <button type="button" class="chip-btn ${archCat ? '' : 'on'}" data-cat="">Todos · ${archDocs.length}</button>
       ${cats.map((c) => `<button type="button" class="chip-btn ${archCat === c ? 'on' : ''} ${c === NO_CAT ? 'warn' : ''}" data-cat="${esc(c)}">${esc(c)} · ${counts[c]}</button>`).join('')}
     </div>
+    ${admin && archDocs.length > 1 ? `<p class="small muted arch-hint">${icon('grip', 15)} Para cambiar el orden, mantén pulsado el asa y arrastra el documento.</p>` : ''}
     ${counts[NO_CAT] && admin ? `<p class="note banner rent-note">${icon('info', 16)} <span>Hay ${plural(counts[NO_CAT], 'documento', 'documentos')} sin tipo. Pulsa ⋮ junto a cada uno para indicar su tipo.</span></p>` : ''}
     <div class="rows" id="arch-list"></div>`
     : `<div class="empty"><span class="tile-ico">${icon('archive', 28)}</span><h3>El archivo está vacío</h3><p>${admin ? 'Añade las actas, presupuestos y demás documentos de la comunidad. Los que adjuntes en el tablón entrarán solos.' : 'Aquí estarán las actas, presupuestos y demás documentos de la comunidad.'}</p></div>`}`;
@@ -3209,12 +3211,80 @@ function drawArchiveList() {
   const q = norm(archQuery.trim());
   const docs = archDocs.filter((d) => (!archCat || d.cat === archCat) && (!q || norm(d.name).includes(q) || norm(d.cat).includes(q)));
   list.innerHTML = docs.length ? docs.map((d) => `
-    <div class="arch-doc">
+    <div class="arch-doc" data-id="${d.id}">
+      ${admin && docs.length > 1 ? `<button class="drag-handle" type="button" data-drag aria-label="Mantén pulsado y arrastra para cambiar el orden" title="Arrastra para ordenar">${icon('grip', 20)}</button>` : ''}
       <button class="file-chip" type="button" data-open="${d.id}">${icon(isPdfFile(d) ? 'pdf' : isImageFile(d) ? 'image' : 'clip', 20)}<span><b>${esc(d.name)}</b><small>${esc(d.cat)} · ${shortWhen(d.t)} · ${fmtSize(d.size)}${d.post ? ' · del tablón' : ''}</small></span></button>
       ${admin ? `<button class="icon-btn sm" type="button" data-doc-menu="${d.id}" aria-label="Opciones del documento">${icon('dots', 18)}</button>` : ''}
     </div>`).join('') : '<p class="small muted" style="text-align:center;margin:20px 0">No hay documentos con ese filtro.</p>';
   list.querySelectorAll('[data-open]').forEach((b) => b.addEventListener('click', () => openFileViewer(archDocs.find((d) => d.id === b.dataset.open))));
   list.querySelectorAll('[data-doc-menu]').forEach((b) => b.addEventListener('click', () => openArchiveDoc(archDocs.find((d) => d.id === b.dataset.docMenu))));
+  list.querySelectorAll('[data-drag]').forEach((h) => h.addEventListener('pointerdown', (e) => dragArchiveDoc(e, h.closest('.arch-doc'), list)));
+}
+// Ordenar a mano (cargos): se mantiene pulsada el asa ≡ y se arrastra el documento arriba o abajo.
+// Con un filtro puesto se ordenan los que se ven, sin mover los demás de su sitio.
+function dragArchiveDoc(e, row, list) {
+  e.preventDefault();
+  const scroller = $('view-body');
+  const rows = [...list.querySelectorAll('.arch-doc')];
+  const from = rows.indexOf(row);
+  const top0 = scroller.scrollTop;
+  const mids = rows.map((r) => { const b = r.getBoundingClientRect(); return b.top + top0 + b.height / 2; });
+  const step = rows.length > 1 ? rows[1].getBoundingClientRect().top - rows[0].getBoundingClientRect().top : row.offsetHeight + 8;
+  const y0 = e.clientY;
+  let lastY = e.clientY;
+  let to = from;
+  row.classList.add('dragging');
+  list.classList.add('sorting');
+  navigator.vibrate?.(15);
+  const place = () => {
+    const dy = lastY - y0 + (scroller.scrollTop - top0);
+    row.style.transform = `translateY(${dy}px)`;
+    const center = mids[from] + dy;
+    to = from;
+    mids.forEach((m, i) => { if (i < from && center < m) to = Math.min(to, i); if (i > from && center > m) to = Math.max(to, i); });
+    rows.forEach((r, i) => {
+      if (r === row) return;
+      const shift = from < to && i > from && i <= to ? -step : from > to && i < from && i >= to ? step : 0;
+      r.style.transform = shift ? `translateY(${shift}px)` : '';
+    });
+  };
+  // Si se arrastra cerca del borde de arriba o de abajo, la lista se desplaza sola
+  const auto = setInterval(() => {
+    const b = scroller.getBoundingClientRect();
+    const v = lastY < b.top + 70 ? -10 : lastY > b.bottom - 70 ? 10 : 0;
+    if (v) { scroller.scrollTop += v; place(); }
+  }, 16);
+  const move = (ev) => { lastY = ev.clientY; place(); };
+  const end = async () => {
+    clearInterval(auto);
+    window.removeEventListener('pointermove', move);
+    window.removeEventListener('pointerup', end);
+    window.removeEventListener('pointercancel', end);
+    rows.forEach((r) => { r.style.transform = ''; });
+    row.classList.remove('dragging');
+    list.classList.remove('sorting');
+    if (to === from) return;
+    const shown = rows.map((r) => r.dataset.id);
+    shown.splice(to, 0, shown.splice(from, 1)[0]);
+    const byId = new Map(archDocs.map((d) => [d.id, d]));
+    const slots = archDocs.map((d, i) => (shown.includes(d.id) ? i : -1)).filter((i) => i >= 0);
+    const next = archDocs.slice();
+    slots.forEach((slot, k) => { next[slot] = byId.get(shown[k]); });
+    const before = archDocs;
+    archDocs = next;
+    drawArchiveList();
+    try {
+      await call('arch-order', { ids: archDocs.map((d) => d.id) });
+      toast('Orden guardado');
+    } catch (err) {
+      archDocs = before;
+      toast(err.code === 'stale' ? 'El archivo ha cambiado: vuelve a intentarlo' : errorText(err));
+      loadArchive();
+    }
+  };
+  window.addEventListener('pointermove', move);
+  window.addEventListener('pointerup', end);
+  window.addEventListener('pointercancel', end);
 }
 function openArchiveAdd() {
   const files = [];

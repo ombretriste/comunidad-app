@@ -43,6 +43,7 @@
 //   POST { action: 'arch-list', code }                    -> { docs: [{ id, fid, parts, name, type, size, cat, t, post? }] }
 //   POST { action: 'arch-add', code, files, cat }         (cargos; los adjuntos del tablón entran solos con body.archCat)
 //   POST { action: 'arch-edit', code, id, cat?, name? }   · POST { action: 'arch-del', code, id }   (cargos)
+//   POST { action: 'arch-order', code, ids }              (cargos: orden manual, de arriba abajo)
 //   POST { action: 'icon-set', code, data }              (cargos: icono de la comunidad, JPEG en data URL; '' lo quita)
 //   POST { action: 'icon-get', code }                     -> { data }
 //   POST { action: 'file-put', code, fid, part, parts, data } (cargos: trozo en base64 de un archivo del tablón)
@@ -1012,6 +1013,18 @@ module.exports = async (req, res) => {
         if (exists.some((e) => !Number(e))) return bad('file-missing', 409);
         await pipeline(keys.map((k) => ['PERSIST', k])); // en el Archivo no caducan
         await archiveAdd(cid, files, cleanText(body.cat, 40) || NO_CAT, mid);
+        return ok();
+      }
+      case 'arch-order': {
+        // Orden manual del Archivo (como se ve, de arriba abajo). Se guarda al revés: los nuevos se
+        // añaden al final de la lista guardada y así salen arriba.
+        if (!admin) return needAdmin();
+        const docs = await getJSON(K.arch(cid), []);
+        const ids = Array.isArray(body.ids) ? body.ids.map(String) : [];
+        if (ids.length !== docs.length || new Set(ids).size !== ids.length) return bad('stale', 409);
+        const byId = new Map(docs.map((d) => [d.id, d]));
+        if (!ids.every((id) => byId.has(id))) return bad('stale', 409);
+        await setJSON(K.arch(cid), ids.slice().reverse().map((id) => byId.get(id)));
         return ok();
       }
       case 'arch-edit':
