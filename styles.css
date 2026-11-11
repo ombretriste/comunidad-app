@@ -740,3 +740,15 @@ body.in-call { overflow: hidden; }
 .sig-wait { display: inline-flex; align-items: center; gap: 5px; color: var(--warn); }
 .sign-banner { border-color: color-mix(in srgb, var(--accent) 50%, var(--line)); }
 .sign-banner .tile-ico { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, transparent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+
+/* Instrucciones de uso */
+.help-intro { margin: 0 2px; font-size: 14px; color: var(--muted); }
+.help-sec { padding: 0; }
+.help-sec summary { display: flex; align-items: center; gap: 12px; padding: 12px 14px; cursor: pointer; list-style: none; }
+.help-sec summary::-webkit-details-marker { display: none; }
+.help-sec summary .tile-ico { flex: 0 0 40px; width: 40px; height: 40px; }
+.help-sec summary b { flex: 1; min-width: 0; font-size: 16px; font-weight: 400; }
+.help-chev { color: var(--muted); display: grid; transition: transform .2s; }
+.help-sec[open] .help-chev { transform: rotate(45deg); }
+.help-sec ul { margin: 0; padding: 0 16px 14px 34px; display: grid; gap: 8px; font-size: 14px; line-height: 1.5; }
+.help-sec li b { font-weight: 500; }

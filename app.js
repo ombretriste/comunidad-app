@@ -1,7 +1,7 @@
 'use strict';
 
 // Versión de la app (se ve en Información). Arreglos y ajustes: 0.x.y; novedades: 0.x.0.
-const APP_VERSION = '0.18.0';
+const APP_VERSION = '0.19.0';
 const APP_NAME = 'Mi comunidad';
 // Uso de la app en Vercel Analytics: cada sección cuenta como una página virtual (nunca datos).
 const track = (path) => { try { window.va?.('pageview', { path }); } catch (_) { /* sin analítica */ } };
@@ -14,6 +14,7 @@ const DM_EVERY_MS = 5000;      // conversación con la presidencia abierta: cada
 const GROUP_GAP_MS = 5 * 60e3;
 
 const ICONS = {
+  help: '<circle cx="12" cy="12" r="8.5"/><path d="M9.6 9.4a2.5 2.5 0 1 1 3.4 2.3c-.6.3-1 .8-1 1.5v.6"/><circle cx="12" cy="16.6" r=".9" fill="currentColor" stroke="none"/>',
   info: '<circle cx="12" cy="12" r="8.5"/><path d="M12 11v5.5"/><circle cx="12" cy="7.8" r=".9" fill="currentColor" stroke="none"/>',
   close: '<path d="M6 6l12 12M18 6L6 18"/>',
   check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
@@ -613,10 +614,10 @@ document.addEventListener('visibilitychange', () => {
 // ---------- Secciones a pantalla completa ----------
 
 let view = null; // { name, arg, tick?, timer? }
-const VIEW_TITLES = { acta: 'Acta de reunión', archive: 'Archivo', board: 'Tablón de anuncios', contact: 'Contacta con la presidencia', threads: 'Mensajes de vecinos', thread: '', rooms: 'Chats de vecinos', chat: 'Chat de vecinos', polls: 'Encuestas', admin: 'Gestión de la comunidad' };
+const VIEW_TITLES = { help: 'Instrucciones de uso', acta: 'Acta de reunión', archive: 'Archivo', board: 'Tablón de anuncios', contact: 'Contacta con la presidencia', threads: 'Mensajes de vecinos', thread: '', rooms: 'Chats de vecinos', chat: 'Chat de vecinos', polls: 'Encuestas', admin: 'Gestión de la comunidad' };
 
 function openView(name, arg) {
-  if (!st) return;
+  if (!st && name !== 'help') return;
   closeView(true);
   view = { name, arg };
   track(`/${name}`);
@@ -650,10 +651,11 @@ $('view-back').addEventListener('click', () => {
 });
 
 function renderView() {
-  if (!view || !st) return;
+  if (!view || (!st && view.name !== 'help')) return;
   const body = $('view-body');
   const top = body.scrollTop;
-  if (view.name === 'board') renderBoard(body);
+  if (view.name === 'help') renderHelp(body);
+  else if (view.name === 'board') renderBoard(body);
   else if (view.name === 'polls') renderPolls(body);
   else if (view.name === 'rooms') renderRooms(body);
   else if (view.name === 'archive') renderArchive(body);
@@ -4155,6 +4157,7 @@ function menuItems() {
   if (sess.code && st && isAdmin()) items.push({ icon: 'pdf', label: 'Documentos', run: openDocsSheet });
   if (sess.code && st && isAdmin()) items.push({ icon: 'edit', label: 'Acta de reunión', run: openActa });
   if (sess.code && st) items.push({ icon: pushState() === 'on' ? 'bell' : 'bellOff', label: `Avisos: ${pushState() === 'on' ? 'activados' : 'desactivados'}`, run: openPushSheet });
+  items.push({ icon: 'help', label: 'Instrucciones de uso', run: () => openView('help') });
   if (sess.code && st) items.push({ icon: 'logout', label: 'Salir de esta comunidad', danger: true, run: () => confirmSheet({
     title: '¿Salir de la comunidad?', text: 'Se quitará tu código de este dispositivo. Para volver a entrar necesitarás escribirlo de nuevo.', ok: 'Salir', danger: true,
     run: async () => logout(),
@@ -4192,6 +4195,121 @@ function openInfoSheet() {
     <p class="small muted">Nadie da su nombre ni su teléfono: cada vivienda se identifica con el código que deja la presidencia en su buzón, y pueden usarlo todas las personas que viven en ella, cada una en su móvil. Las conversaciones con la presidencia solo las leen el presidente y el vicepresidente, y el voto en las encuestas es secreto.</p>
     <div class="center-actions"><button type="button" class="done-btn" data-close>Cerrar</button></div>`);
   s.querySelector('[data-close]').addEventListener('click', closeSheet);
+}
+
+// ---------- Instrucciones de uso ----------
+// Textos fijos (sin datos de usuario). Cada apartado se abre y se cierra tocándolo.
+
+const HELP_ALL = [
+  { icon: 'key', title: 'Primeros pasos', items: [
+    'Cada vivienda y local tiene un <b>código propio</b> de 12 caracteres que la presidencia deja en el buzón. Al abrir la app por primera vez se escribe ese código y ya no hay que volver a hacerlo en ese móvil.',
+    'Pueden usarlo <b>todas las personas de la vivienda</b>, cada una en su móvil: todo lo que hagan cuenta como la misma vivienda.',
+    'Si no tienes código o lo has perdido, entra en el menú <b>⋯ › Solicitar mi código</b>: indicas el código de la comunidad y tu vivienda, y la presidencia te dejará uno nuevo en el buzón. El anterior deja de valer.',
+    '<b>Instálala en el móvil</b> para abrirla como una app más (y, en el iPhone, para recibir avisos): en el iPhone, desde Safari, botón Compartir › <b>Añadir a pantalla de inicio</b>; en Android, desde Chrome, menú de los tres puntos › <b>Instalar aplicación</b>.',
+    'Para dejar de usarla en un móvil: menú <b>⋯ › Salir de esta comunidad</b>. Para volver a entrar hará falta escribir el código otra vez.',
+  ] },
+  { icon: 'home', title: 'Pantalla principal', items: [
+    'Muestra el nombre y el icono de la comunidad y un botón para cada sección. Cuando hay algo nuevo, el botón se resalta y lo indica (anuncios nuevos, mensajes sin leer, encuestas pendientes de votar…).',
+    'Arriba pueden aparecer avisos: activar las notificaciones o un documento pendiente de firmar.',
+    'Desde cualquier sección, la flecha de arriba a la izquierda vuelve a esta pantalla.',
+  ] },
+  { icon: 'board', title: 'Tablón de anuncios', items: [
+    'Las noticias de la comunidad, publicadas por el presidente o el vicepresidente. Los anuncios fijados salen siempre arriba y los nuevos llevan la marca «Nuevo».',
+    'Los anuncios pueden llevar <b>archivos</b> (actas, convocatorias, circulares, fotos): al tocarlos se ven dentro de la app y, desde el visor, se pueden ampliar, compartir o guardar.',
+    'Los resultados de las encuestas se publican aquí automáticamente al cerrarse.',
+  ] },
+  { icon: 'mail', title: 'Contacta con la presidencia', items: [
+    'Una conversación <b>privada</b> entre tu vivienda y la presidencia: solo la leen el presidente y el vicepresidente. Sirve para avisos, quejas, consultas o propuestas.',
+    'Puedes adjuntar <b>fotos y archivos</b> con el clip (hasta 10 MB). Los adjuntos se guardan un mes.',
+    'Con los botones de arriba puedes <b>llamar</b> a la presidencia por voz o por videollamada.',
+    'Cuando entra una persona nueva en los cargos, las conversaciones anteriores se borran.',
+  ] },
+  { icon: 'chat', title: 'Chats de vecinos', items: [
+    'Al entrar verás la lista de chats en los que está tu vivienda. Los crea la presidencia: pueden ser para toda la comunidad o solo para algunas viviendas (por ejemplo, la comisión de obras).',
+    'Se pueden enviar mensajes, <b>fotos y archivos</b> (duran un mes).',
+    '<b>Llamadas en grupo</b>: dentro de un chat, el botón del teléfono empieza una llamada de solo voz y el de la cámara una videollamada (hasta 6 personas). Los demás reciben un aviso y ven el botón «Unirse».',
+    'La presidencia modera los chats: puede cerrarlos, borrar mensajes y bloquear a una vivienda que no respete las normas.',
+  ] },
+  { icon: 'poll', title: 'Encuestas', items: [
+    'La presidencia propone una pregunta con varias opciones. Cada vivienda tiene <b>un voto</b> y es <b>secreto</b>: nadie puede ver qué ha votado cada vivienda.',
+    'Algunas encuestas tienen fecha de cierre. Al cerrarse, el resultado se publica en el tablón.',
+  ] },
+  { icon: 'archive', title: 'Archivo', items: [
+    'En el menú <b>⋯ › Archivo</b> están los documentos importantes de la comunidad (actas, presupuestos, convocatorias…), clasificados por tipo.',
+    'Se pueden filtrar por tipo o buscar por nombre, y se ven dentro de la app. Los documentos del archivo no caducan.',
+  ] },
+  { icon: 'edit', title: 'Firmar un documento', items: [
+    'Si la presidencia te pide que firmes un acta, recibirás un aviso y aparecerá en la pantalla principal: <b>«Tienes un documento pendiente de firmar»</b>.',
+    'Pulsa <b>Firmar</b>: puedes ver el documento antes y luego firmar con el dedo en la pantalla. La firma vuelve sola al acta.',
+  ] },
+  { icon: 'bell', title: 'Avisos (notificaciones)', items: [
+    'La app avisa de anuncios nuevos, encuestas y resultados, mensajes en los chats, respuestas de la presidencia, llamadas y peticiones de firma.',
+    'Se activan o desactivan en el menú <b>⋯ › Avisos</b>. Se activan en cada móvil por separado.',
+    'En el <b>iPhone</b> solo funcionan con la app añadida a la pantalla de inicio. En <b>Android</b>, si aparecen como bloqueadas, hay que permitirlas en los ajustes del navegador o del móvil (Notificaciones).',
+  ] },
+  { icon: 'palette', title: 'Apariencia', items: [
+    'En el menú <b>⋯ › Opciones de visualización</b> se elige el modo claro u oscuro y el color del fondo.',
+  ] },
+  { icon: 'shield', title: 'Privacidad', items: [
+    'Nadie da su nombre ni su teléfono: los vecinos se ven solo por su vivienda (por ejemplo, «3º B»).',
+    'El código es <b>personal</b> de tu vivienda: no lo compartas con personas que no vivan en ella.',
+    'Si hay alguien de confianza que mantiene la app («Administrador de la app»), puede gestionarla, pero no vota ni lee el chat de la presidencia.',
+  ] },
+];
+
+const HELP_JUNTA = [
+  { icon: 'board', title: 'Publicar en el tablón', items: [
+    'En el tablón, <b>Nuevo anuncio</b>: título, texto y hasta 5 archivos de 10 MB. Todos los vecinos reciben un aviso.',
+    'Cada anuncio se puede <b>fijar arriba</b> o eliminar. Los archivos adjuntos entran solos en el Archivo (con su tipo) y se conservan aunque se borre el anuncio.',
+  ] },
+  { icon: 'inbox', title: 'Mensajes de vecinos', items: [
+    'Todas las conversaciones privadas de las viviendas con la presidencia. Las sin leer salen resaltadas.',
+    'Desde cada conversación se puede responder, adjuntar archivos y llamar a esa vivienda por voz o vídeo.',
+  ] },
+  { icon: 'chat', title: 'Crear y moderar chats', items: [
+    'En Chats de vecinos, <b>Nuevo chat</b>: para todas las viviendas (también las que se den de alta después) o solo para algunas. No hay ningún chat por defecto.',
+    'Los cargos están en todos los chats y pueden cambiarles el nombre, cerrarlos o abrirlos, borrar mensajes, bloquear viviendas y eliminarlos.',
+    'El chat fijo <b>«Presidencia»</b> es solo para el presidente y el vicepresidente. Se vacía cuando entra alguien nuevo en los cargos.',
+  ] },
+  { icon: 'poll', title: 'Crear encuestas', items: [
+    'En Encuestas, <b>Nueva encuesta</b>: pregunta, opciones y, si se quiere, fecha de cierre. Se puede cerrar antes a mano.',
+    'Al cerrarse, el resultado se publica solo en el tablón.',
+  ] },
+  { icon: 'gear', title: 'Gestión de la comunidad', items: [
+    '<b>Nombre e icono</b> de la comunidad: salen en la app y en todos los PDF.',
+    '<b>Código de la comunidad</b>: el que usan los vecinos para pedir su código. Las <b>solicitudes de código</b> aparecen aquí para atenderlas.',
+    '<b>Viviendas y locales</b>: alta por plantas (puertas A/B/C/D, Izquierda/Derecha…), bajos y locales, o una por línea. De cada una se puede cambiar el nombre, marcarla como alquilada (su código se entrega al propietario), generar un código nuevo, bloquearla o darla de baja.',
+    '<b>Tarjetas de códigos</b> en PDF para dejar en los buzones (4 por hoja).',
+    '<b>Cambio de presidente y vicepresidente</b>: ambos tienen los mismos permisos. Si entra una vivienda nueva en los cargos, se borran las conversaciones privadas y el chat «Presidencia»; si solo se intercambian los cargos, no.',
+    '<b>Administrador de la app</b> (opcional): una persona de confianza que entra con el código de la comunidad y una clave, desde «Acceso de administrador». Tiene los permisos de gestión, pero no es una vivienda.',
+  ] },
+  { icon: 'pdf', title: 'Documentos', items: [
+    'En el menú <b>⋯ › Documentos</b> se crean PDF formales con el icono de la comunidad: aviso de la app (con el enlace y el código), convocatorias de junta ordinaria y extraordinaria (con autorización de representación), reunión de la comisión de obras, listado de asistencia, comunicado libre y las tarjetas de todos los códigos.',
+    'Se pueden ver dentro de la app (y compartir, guardar o imprimir) o publicar directamente en el tablón. Se puede añadir tu firma dibujada en la pantalla.',
+  ] },
+  { icon: 'edit', title: 'Acta de reunión', items: [
+    'En el menú <b>⋯ › Acta de reunión</b>: tipo de junta, fecha, hora, lugar, asistentes (presente, representada y por quién), orden del día con textos tipo, observaciones y hora de cierre. Se rellena sola con la última convocatoria del tablón y el borrador se guarda en el móvil.',
+    '<b>Firmas</b>: el presidente y el secretario pueden firmar con el dedo en ese móvil, o pulsar <b>«Pedir a otra vivienda»</b> para que firme desde su propio móvil. Mientras tanto se ve «Pendiente de la vivienda…» y la firma llega sola.',
+    'Al terminar, <b>Ver PDF</b> o <b>Publicar en el tablón</b> (también entra en el Archivo como «Actas»).',
+  ] },
+  { icon: 'archive', title: 'Ordenar el Archivo', items: [
+    'Los cargos pueden añadir documentos, cambiar su tipo o nombre, quitarlos y <b>ordenarlos arrastrándolos</b> por su asa. Los nuevos entran arriba.',
+  ] },
+];
+
+function renderHelp(body) {
+  const sec = (h, i) => `
+    <details class="card help-sec">
+      <summary><span class="tile-ico">${icon(h.icon, 20)}</span><b>${h.title}</b><span class="help-chev">${icon('plus', 18, 1.8)}</span></summary>
+      <ul>${h.items.map((t) => `<li>${t}</li>`).join('')}</ul>
+    </details>`;
+  const junta = st && isAdmin();
+  $('view-sub').textContent = st?.community?.name || APP_NAME;
+  body.innerHTML = `
+    <p class="help-intro">Toca cada apartado para ver cómo funciona.</p>
+    ${junta ? '<h3 class="section-title">Para todos los vecinos</h3>' : ''}
+    ${HELP_ALL.map(sec).join('')}
+    ${junta ? `<h3 class="section-title">Para la presidencia</h3>${HELP_JUNTA.map(sec).join('')}` : ''}`;
 }
 
 // ---------- Opciones de visualización (modo y fondo) ----------
