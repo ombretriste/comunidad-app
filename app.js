@@ -1,7 +1,7 @@
 'use strict';
 
 // Versión de la app (se ve en Información). Arreglos y ajustes: 0.x.y; novedades: 0.x.0.
-const APP_VERSION = '0.17.0';
+const APP_VERSION = '0.18.0';
 const APP_NAME = 'Mi comunidad';
 // Uso de la app en Vercel Analytics: cada sección cuenta como una página virtual (nunca datos).
 const track = (path) => { try { window.va?.('pageview', { path }); } catch (_) { /* sin analítica */ } };
@@ -280,6 +280,7 @@ function renderHome() {
       </div>
     </section>
     ${pushBannerHTML()}
+    ${myPendingSigs().length ? `<section class="card push-banner sign-banner"><span class="tile-ico">${icon('edit', 22)}</span><span class="tile-text"><b>${myPendingSigs().length === 1 ? 'Tienes un documento pendiente de firmar' : `Tienes ${myPendingSigs().length} documentos pendientes de firmar`}</b><small>${esc(myPendingSigs()[0].title)}</small></span><button class="done-btn" type="button" data-signreq>Firmar</button></section>` : ''}
     <section class="tiles">
       <button class="tile ${newPosts ? 'hot' : ''}" type="button" data-go="board">
         <span class="tile-ico">${icon('board', 24)}</span>
@@ -327,6 +328,7 @@ function renderHome() {
 
 $('home').addEventListener('click', (e) => {
   if (e.target.closest('[data-push]')) return enablePush();
+  if (e.target.closest('[data-signreq]')) return openSignRequest(myPendingSigs()[0]);
   const go = e.target.closest('[data-go]');
   if (go) { if (go.dataset.go === 'chat') openChats(); else openView(go.dataset.go); }
 });
@@ -587,6 +589,7 @@ async function refresh() {
     if (!sess.code) return;
     renderHome();
     if (view && ['board', 'polls', 'threads', 'admin', 'rooms'].includes(view.name)) renderView();
+    if (view?.name === 'acta' && applySignedReqs() && !document.activeElement?.matches('input, textarea, select')) { const b = $('view-body'); const top = b.scrollTop; renderActa(b); b.scrollTop = top; }
     if (view?.name === 'chat' && curRoom && (roomById(curRoom.id)?.call || 0) !== curRoom.shownCall) { curRoom.shownCall = roomById(curRoom.id)?.call || 0; renderChat(); }
     checkRings();
     if (st && linkGo) { const g = linkGo; linkGo = ''; goTo(g); }
@@ -2521,6 +2524,8 @@ function goTo(go) {
   if (go === 'chat') { openChats(); return; }
   if (go === 'admin' && !isAdmin()) return;
   if (go === 'contact' && isAdmin()) return openView('threads');
+  if (go === 'firmas') { openSignRequest(myPendingSigs()[0]); return; }
+  if (go === 'acta') { if (isAdmin()) openActa(); return; }
   if (VIEW_TITLES[go] !== undefined) openView(go);
 }
 
@@ -3887,6 +3892,60 @@ function fillFromConvocatoria(c) {
   acta.from = `${c.title} (${shortWhen(c.t)})`;
   saveActa();
 }
+// ----- Firmas pedidas a otra vivienda -----
+const actaReq = (slot) => (st?.sigReqs || []).filter((r) => r.ref === acta?.id && r.slot === slot).sort((a, b) => b.t - a.t)[0];
+// Las firmas que ya han llegado se ponen en el acta (una sola vez cada una)
+function applySignedReqs() {
+  if (!acta?.id) return false;
+  let changed = false;
+  for (const r of st?.sigReqs || []) {
+    if (r.ref !== acta.id || r.status !== 'signed' || !r.sig || (acta.used || []).includes(r.id)) continue;
+    acta[r.slot] = r.sig;
+    acta.used = (acta.used || []).concat(r.id);
+    changed = true;
+    toast(`Ha llegado la firma de la vivienda ${r.toLabel}`);
+  }
+  if (changed) saveActa();
+  return changed;
+}
+function askActaSignature(slot) {
+  const units = (st.units || []).filter((u) => u.mid !== st.me.mid);
+  const who = slot === 'sigP' ? 'Vº Bº El Presidente' : 'El Secretario';
+  pickUnit(`¿Quién firma «${who}»?`, units, (u) => confirmSheet({
+    title: `¿Pedir la firma a la vivienda ${u.label}?`,
+    text: 'Le llegará un aviso; podrá ver el acta y firmarla con el dedo en su móvil. Su firma aparecerá aquí sola.',
+    ok: 'Pedir la firma',
+    run: async () => {
+      const spec = actaSpec();
+      const d = parseDay(acta.fecha);
+      const meta = await uploadFile(actaFile(), 'application/pdf', formalDoc(spec).build());
+      await call('sig-ask', { to: u.mid, slot, label: who, title: `${spec.title}${d ? ` del ${plainDate(d)}` : ''}`, ref: acta.id, files: [meta] });
+      await refresh();
+      if (view?.name === 'acta') renderActa($('view-body'));
+      toast(`Petición enviada a la vivienda ${u.label}`);
+    },
+  }));
+}
+// Vecino al que se le pide una firma: ve el documento y firma con el dedo
+const myPendingSigs = () => (st?.sigReqs || []).filter((r) => r.to === st.me.mid && r.status === 'pending');
+function openSignRequest(r) {
+  if (!r) return;
+  const s = openCenter(`
+    <span class="big-ico-sm">${icon('edit', 30, 1.4)}</span>
+    <h2 class="sheet-title">Te piden tu firma</h2>
+    <p class="small"><b>${esc(r.title)}</b></p>
+    <p class="small muted">Firma como «${esc(r.label)}». Antes de firmar, revisa el documento.</p>
+    <div class="center-actions"><button class="ghost-btn" type="button" data-view>${icon('pdf', 18)} Ver el documento</button><button class="done-btn" type="button" data-sign>${icon('edit', 18)} Firmar</button></div>`);
+  s.querySelector('[data-view]').addEventListener('click', () => openFileViewer(r.file));
+  s.querySelector('[data-sign]').addEventListener('click', () => openSignaturePad(`Firma: ${r.label}`, async (sig) => {
+    try {
+      await call('sig-sign', { id: r.id, sig });
+      await refresh();
+      toast('Firma enviada a la presidencia');
+    } catch (e) { toast(errorText(e)); }
+  }, () => openSignRequest(r)));
+}
+
 function openActa() {
   track('/acta');
   acta = load(ACTA_KEY, null);
@@ -3897,6 +3956,8 @@ function openActa() {
     else acta.puntos = [{ titulo: 'Lectura y aprobación, si procede, del acta anterior.', texto: '' }, { titulo: 'Ruegos y preguntas.', texto: '' }];
     saveActa();
   }
+  if (!acta.id) { acta.id = randomHex(8); saveActa(); }
+  applySignedReqs();
   openView('acta');
 }
 const actaUnits = () => (st.units || []).slice().sort((a, b) => a.label.localeCompare(b.label, 'es', { numeric: true }));
@@ -3976,11 +4037,14 @@ function renderActa(body) {
     <section class="card stack">
       <p class="label">Firmas</p>
       <p class="small muted">Se pueden firmar en pantalla con el dedo al terminar la reunión. Se guardan con este borrador.</p>
-      <div class="sig-pair">
-        <div class="sig-box">${sigThumb(acta.sigP) || '<span class="small muted">Sin firmar</span>'}<b class="small">Vº Bº El Presidente</b>
-          <div class="row-btns"><button class="ghost-btn sm-btn" type="button" data-sig="sigP">${icon('edit', 15)} ${acta.sigP ? 'Repetir' : 'Firmar'}</button>${acta.sigP ? `<button class="icon-btn sm" type="button" data-unsig="sigP" aria-label="Quitar la firma">${icon('close', 15)}</button>` : ''}</div></div>
-        <div class="sig-box">${sigThumb(acta.sigS) || '<span class="small muted">Sin firmar</span>'}<b class="small">${acta.secretario.trim() ? 'El/La Secretario/a' : 'El Secretario'}</b>
-          <div class="row-btns"><button class="ghost-btn sm-btn" type="button" data-sig="sigS">${icon('edit', 15)} ${acta.sigS ? 'Repetir' : 'Firmar'}</button>${acta.sigS ? `<button class="icon-btn sm" type="button" data-unsig="sigS" aria-label="Quitar la firma">${icon('close', 15)}</button>` : ''}</div></div>
+      <div class="sig-pair">${[['sigP', 'Vº Bº El Presidente'], ['sigS', acta.secretario.trim() ? 'El/La Secretario/a' : 'El Secretario']].map(([k, name]) => {
+        const req = actaReq(k);
+        const waiting = req && req.status === 'pending' && !acta[k];
+        return `<div class="sig-box">${sigThumb(acta[k]) || (waiting ? `<span class="small sig-wait">${icon('clock', 14)} Pendiente de la vivienda ${esc(req.toLabel)}</span>` : '<span class="small muted">Sin firmar</span>')}<b class="small">${name}</b>
+          <div class="row-btns">${waiting
+            ? `<button class="ghost-btn sm-btn danger" type="button" data-unask="${req.id}">${icon('close', 15)} Cancelar la petición</button>`
+            : `<button class="ghost-btn sm-btn" type="button" data-sig="${k}">${icon('edit', 15)} ${acta[k] ? 'Repetir' : 'Firmar aquí'}</button>${acta[k] ? `<button class="icon-btn sm" type="button" data-unsig="${k}" aria-label="Quitar la firma">${icon('close', 15)}</button>` : `<button class="ghost-btn sm-btn" type="button" data-ask="${k}">${icon('send', 15)} Pedir a otra vivienda</button>`}`}</div></div>`;
+      }).join('')}
       </div>
     </section>
 
@@ -4025,7 +4089,11 @@ function renderActa(body) {
     const k = b.dataset.sig;
     openSignaturePad(k === 'sigP' ? 'Firma del Presidente' : 'Firma del Secretario', (sig) => { acta[k] = sig; saveActa(); const top = body.scrollTop; renderActa(body); body.scrollTop = top; });
   }));
-  body.querySelectorAll('[data-unsig]').forEach((b) => b.addEventListener('click', () => { acta[b.dataset.unsig] = null; saveActa(); const top = body.scrollTop; renderActa(body); body.scrollTop = top; }));
+  body.querySelectorAll('[data-unsig]').forEach((b) => b.addEventListener('click', () => { acta[b.dataset.unsig] = null; acta.used = (acta.used || []).concat(actaReq(b.dataset.unsig)?.id || []); saveActa(); const top = body.scrollTop; renderActa(body); body.scrollTop = top; }));
+  body.querySelectorAll('[data-ask]').forEach((b) => b.addEventListener('click', () => askActaSignature(b.dataset.ask)));
+  body.querySelectorAll('[data-unask]').forEach((b) => b.addEventListener('click', async () => {
+    try { await call('sig-del', { id: b.dataset.unask }); await refresh(); const top = body.scrollTop; renderActa(body); body.scrollTop = top; toast('Petición de firma cancelada'); } catch (e) { toast(errorText(e)); }
+  }));
   body.querySelector('[data-reset]').addEventListener('click', () => confirmSheet({
     title: '¿Empezar un acta nueva?', text: 'Se borrará el borrador de este móvil.', ok: 'Empezar de nuevo', danger: true,
     run: async () => { save(ACTA_KEY, null); acta = null; openActa(); },
@@ -4040,6 +4108,8 @@ function renderActa(body) {
       run: async () => {
         const meta = await uploadFile(actaFile(), 'application/pdf', formalDoc(spec).build());
         await call('post', { title: `${spec.title}${actaDateText() ? ` del ${actaDateText()}` : ''}`, text: `Se adjunta el acta de la reunión del ${actaDateText()}.`, files: [meta], archCat: 'Actas' });
+        // las peticiones de firma de esta acta ya no hacen falta
+        for (const r of (st.sigReqs || []).filter((x) => x.ref === acta.id)) await call('sig-del', { id: r.id }).catch(() => {});
         archDocs = null;
         await refresh();
         toast('Acta publicada en el tablón y guardada en el Archivo');

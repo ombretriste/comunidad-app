@@ -734,6 +734,9 @@ body.in-call { overflow: hidden; }
 /* ---------- Firma en pantalla ---------- */
 .sig-pad { width: 100%; max-width: 520px; aspect-ratio: 900 / 380; height: auto; border-radius: 14px; background: #fff; touch-action: none; border: 1px solid var(--line); cursor: crosshair; }
 .sig-box { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding: 10px; border: 1px dashed var(--line); border-radius: 14px; }
-.sig-thumb { max-width: 200px; max-height: 70px; background: #fff; border-radius: 8px; padding: 4px; }
+.sig-thumb { max-width: min(200px, 100%); max-height: 70px; object-fit: contain; background: #fff; border-radius: 8px; padding: 4px; }
 .sig-pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 .sig-pair .sig-box { align-items: center; text-align: center; }
+.sig-wait { display: inline-flex; align-items: center; gap: 5px; color: var(--warn); }
+.sign-banner { border-color: color-mix(in srgb, var(--accent) 50%, var(--line)); }
+.sign-banner .tile-ico { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, transparent); background: color-mix(in srgb, var(--accent) 10%, transparent); }

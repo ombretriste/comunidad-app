@@ -43,6 +43,10 @@
 //   POST { action: 'admin-login', pub, clave }            -> { code }   (código de sesión del administrador)
 //   POST { action: 'admin-set', code, clave }             (presidente/vicepresidente lo configuran; el administrador cambia su clave)
 //   POST { action: 'admin-off', code }                    (presidente/vicepresidente lo quitan)
+//   Firmas pedidas (p. ej. el secretario firma el acta en su móvil):
+//   POST { action: 'sig-ask', code, to, slot, label, title, ref, files }   (cargos; files: el PDF para que lo vea)
+//   POST { action: 'sig-sign', code, id, sig: { d, w, h } }               (la vivienda a la que se pidió)
+//   POST { action: 'sig-del', code, id }                                   (cargos)
 //   Archivo de la comunidad (actas, presupuestos…): todos lo consultan; solo los cargos añaden, cambian o borran.
 //   POST { action: 'arch-list', code }                    -> { docs: [{ id, fid, parts, name, type, size, cat, t, post? }] }
 //   POST { action: 'arch-add', code, files, cat }         (cargos; los adjuntos del tablón entran solos con body.archCat)
@@ -188,6 +192,7 @@ const K = {
   file: (cid, fid, part) => `vec:c:${cid}:f:${fid}:${part}`,
   icon: (cid) => `vec:c:${cid}:icon`,
   arch: (cid) => `vec:c:${cid}:arch`,
+  sigreq: (cid) => `vec:c:${cid}:sigreq`,
   roomChat: (cid, room) => (room === 'general' ? `vec:c:${cid}:chat` : `vec:c:${cid}:chat:${room}`),
   roomSeq: (cid, room) => (room === 'general' ? `vec:c:${cid}:cs` : `vec:c:${cid}:cs:${room}`),
   calls: (cid, mid) => `vec:c:${cid}:call:${mid}`,
@@ -626,6 +631,8 @@ module.exports = async (req, res) => {
             return { id: r.id, name: r.name, junta: !!r.junta, members: r.members ? r.members.filter((m) => com.units[m]) : null, open: r.open !== false, last: last ? { s: last.s, t: last.t, mine: last.mid === mid } : { s: 0, t: 0 }, call: Number(tails[i * 2 + 1]) || 0 };
           }),
           rings,
+          // firmas pedidas: las que me piden a mí y (cargos) todas, con la firma ya hecha para recogerla
+          sigReqs: (await getJSON(K.sigreq(cid), [])).filter((r) => r.to === mid || admin).map((r) => ({ ...r, toLabel: unitName(com, r.to), sig: admin ? r.sig : undefined })),
           dm: idx[mid] || null,
         };
         if (admin) {
@@ -1040,6 +1047,52 @@ module.exports = async (req, res) => {
         if (!data) return bad('gone', 404);
         return res.status(200).json({ data });
       }
+      // ----- Firmas pedidas -----
+      case 'sig-ask': {
+        if (!admin) return needAdmin();
+        if (!com.units[body.to]) return bad('gone', 404);
+        const slot = ['sigP', 'sigS'].includes(body.slot) ? body.slot : '';
+        const ref = cleanText(body.ref, 40);
+        if (!slot || !ref) return bad();
+        const files = cleanFiles(body.files).slice(0, 1);
+        if (!files.length) return bad();
+        const keys = fileKeys(cid, files);
+        const exists = await pipeline(keys.map((k) => ['EXISTS', k]));
+        if (exists.some((e) => !Number(e))) return bad('file-missing', 409);
+        await pipeline(keys.map((k) => ['EXPIRE', k, 30 * 86400]));
+        const reqs = (await getJSON(K.sigreq(cid), [])).filter((r) => !(r.ref === ref && r.slot === slot)); // una petición por firma
+        const title = cleanText(body.title, 140) || 'Documento';
+        reqs.push({ id: randomId(6), ref, slot, label: cleanText(body.label, 60) || 'Firma', title, to: body.to, by: mid, t: Date.now(), file: files[0], status: 'pending' });
+        await setJSON(K.sigreq(cid), reqs.slice(-50));
+        await notify(cid, com, body.to, mid, { title: com.name, body: `✍️ La presidencia te pide que firmes: «${short(title, 90)}»`, go: 'firmas', tag: 'firmas' });
+        return ok();
+      }
+      case 'sig-sign': {
+        const reqs = await getJSON(K.sigreq(cid), []);
+        const r = reqs.find((x) => x.id === body.id);
+        if (!r || r.status !== 'pending') return bad('gone', 404);
+        if (r.to !== mid) return needAdmin();
+        const g = body.sig || {};
+        const w = Math.round(Number(g.w));
+        const h = Math.round(Number(g.h));
+        if (typeof g.d !== 'string' || g.d.length > 150000 || !/^data:image\/jpeg;base64,[A-Za-z0-9+/=]+$/.test(g.d) || !(w > 0 && w <= 2000 && h > 0 && h <= 2000)) return bad();
+        r.sig = { d: g.d, w, h };
+        r.status = 'signed';
+        r.signed = Date.now();
+        await setJSON(K.sigreq(cid), reqs);
+        await notify(cid, com, 'admins', mid, { title: com.name, body: `✍️ La vivienda ${me.label} ha firmado «${short(r.title, 90)}»`, go: 'acta', tag: `firma-${r.id}` });
+        return ok();
+      }
+      case 'sig-del': {
+        if (!admin) return needAdmin();
+        const reqs = await getJSON(K.sigreq(cid), []);
+        const r = reqs.find((x) => x.id === body.id);
+        if (!r) return ok();
+        await setJSON(K.sigreq(cid), reqs.filter((x) => x.id !== body.id));
+        await redis('DEL', ...fileKeys(cid, [r.file]));
+        return ok();
+      }
+
       // ----- Archivo de la comunidad -----
       case 'arch-list': {
         // Una sola vez por comunidad: entran los documentos que ya estaban en el tablón antes del Archivo
