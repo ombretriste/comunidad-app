@@ -601,7 +601,13 @@ module.exports = async (req, res) => {
           if (exists.some((e) => !Number(e))) return bad('file-missing', 409);
           await pipeline(keys.map((k) => ['PERSIST', k])); // ya forma parte de un anuncio: no caduca
         }
-        const postId = await addPost(cid, { title, text, by: mid, role, pin: !!body.pin, ...(files.length ? { files } : {}) });
+        // meta: datos de un documento de la app (p. ej. una convocatoria) para reutilizarlos después en el acta
+        let meta = null;
+        if (body.meta && typeof body.meta === 'object' && !Array.isArray(body.meta)) {
+          const raw = JSON.stringify(body.meta);
+          if (raw.length <= 6000) meta = JSON.parse(raw);
+        }
+        const postId = await addPost(cid, { title, text, by: mid, role, pin: !!body.pin, ...(files.length ? { files } : {}), ...(meta ? { meta } : {}) });
         // Los documentos del tablón entran solos en el Archivo, con el tipo elegido al publicar
         if (files.length) await archiveAdd(cid, files, cleanText(body.archCat, 40) || NO_CAT, mid, postId);
         await notify(cid, com, 'all', mid, { title: com.name, body: `📌 ${short(title || text, 120)}`, go: 'board', tag: 'board' });

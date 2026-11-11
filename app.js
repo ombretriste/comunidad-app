@@ -1,7 +1,7 @@
 'use strict';
 
 // Versión de la app (se ve en Información). Arreglos y ajustes: 0.x.y; novedades: 0.x.0.
-const APP_VERSION = '0.14.0';
+const APP_VERSION = '0.15.0';
 const APP_NAME = 'Mi comunidad';
 // Uso de la app en Vercel Analytics: cada sección cuenta como una página virtual (nunca datos).
 const track = (path) => { try { window.va?.('pageview', { path }); } catch (_) { /* sin analítica */ } };
@@ -543,7 +543,7 @@ document.addEventListener('visibilitychange', () => {
 // ---------- Secciones a pantalla completa ----------
 
 let view = null; // { name, arg, tick?, timer? }
-const VIEW_TITLES = { archive: 'Archivo', board: 'Tablón de anuncios', contact: 'Contacta con la presidencia', threads: 'Mensajes de vecinos', thread: '', rooms: 'Chats de vecinos', chat: 'Chat de vecinos', polls: 'Encuestas', admin: 'Gestión de la comunidad' };
+const VIEW_TITLES = { acta: 'Acta de reunión', archive: 'Archivo', board: 'Tablón de anuncios', contact: 'Contacta con la presidencia', threads: 'Mensajes de vecinos', thread: '', rooms: 'Chats de vecinos', chat: 'Chat de vecinos', polls: 'Encuestas', admin: 'Gestión de la comunidad' };
 
 function openView(name, arg) {
   if (!st) return;
@@ -587,6 +587,7 @@ function renderView() {
   else if (view.name === 'polls') renderPolls(body);
   else if (view.name === 'rooms') renderRooms(body);
   else if (view.name === 'archive') renderArchive(body);
+  else if (view.name === 'acta') renderActa(body);
   else if (view.name === 'threads') renderThreads(body);
   else if (view.name === 'admin') renderAdmin(body);
   body.scrollTop = top;
@@ -2851,6 +2852,20 @@ function formalDoc(spec) {
       pdf.center(ML + 13, y, String(b.n), 13, 'F2', '1 1 1');
       lines.forEach((l) => { pdf.text(ML + 40, y, l, 13.5, 'F1', INK); y -= 20; });
       y -= 6;
+    } else if (b.t === 'point') {
+      // Punto del acta: número y título en negrita y, debajo, lo tratado
+      ensure(LEAD * 3);
+      const tl = wrapText(`${b.n}. ${b.title}`, BODY, CW, true);
+      tl.forEach((l) => { ensure(LEAD); pdf.text(ML, y, l, BODY, 'F2', NAVY); y -= LEAD; });
+      paragraph(b.text, { x: ML + 16, width: CW - 16, after: 12 });
+    } else if (b.t === 'sign2') {
+      // Dos firmas: visto bueno del presidente y secretario
+      if (y - 90 < 44) header();
+      y -= 56;
+      pdf.op(`${GREY} RG 0.6 w ${fx(ML)} ${fx(y + 14)} m ${fx(ML + 200)} ${fx(y + 14)} l S ${fx(PAGE_W - ML - 200)} ${fx(y + 14)} m ${fx(PAGE_W - ML)} ${fx(y + 14)} l S`);
+      pdf.center(ML + 100, y, b.left, BODY, 'F2', INK);
+      pdf.center(PAGE_W - ML - 100, y, b.right, BODY, 'F2', INK);
+      y -= 24;
     } else if (b.t === 'close') {
       if (y - 72 < 44) header(); // la firma puede bajar algo más que el texto, hasta encima del pie
       y -= 8;
@@ -3622,7 +3637,7 @@ function openDocEditor(tpl) {
       run: async () => {
         const bytes = formalPDF(spec);
         const meta = await uploadFile(fileName(), 'application/pdf', bytes);
-        await call('post', { title: spec.board.title, text: spec.board.text, files: [meta], archCat: tpl.cat || '' });
+        await call('post', { title: spec.board.title, text: spec.board.text, files: [meta], archCat: tpl.cat || '', meta: { tpl: tpl.id, v } });
         archDocs = null;
         closeSheet();
         await refresh();
@@ -3632,6 +3647,236 @@ function openDocEditor(tpl) {
   });
 }
 
+// ---------- Acta de reunión (cargos) ----------
+// Formulario a pantalla completa: tipo de junta, fecha, hora, lugar, asistentes (presente / representado),
+// orden del día con textos tipo, texto libre y cierre. Toma los datos de la última convocatoria del
+// tablón y guarda el borrador en este dispositivo mientras se rellena. Crea un PDF formal y lo puede
+// publicar en el tablón (y de ahí al Archivo, en «Actas»).
+const ACTA_KEY = 'micomunidad:acta';
+const ACTA_TIPOS = { ordinaria: 'Junta General Ordinaria', extraordinaria: 'Junta General Extraordinaria', otra: 'Reunión' };
+const TEXTOS_TIPO = [
+  ['Aprobado por unanimidad', 'Sometido a votación, se aprueba por unanimidad de los propietarios presentes y representados.'],
+  ['Aprobado por mayoría', 'Sometido a votación, se aprueba por mayoría, con [X] votos a favor, [X] en contra y [X] abstenciones.'],
+  ['No aprobado', 'Sometido a votación, no se alcanza la mayoría necesaria y la propuesta queda rechazada.'],
+  ['Acta anterior aprobada', 'Se da lectura al acta de la junta anterior, que queda aprobada sin modificaciones.'],
+  ['Cuentas aprobadas', 'Se presentan las cuentas del ejercicio, con unos ingresos de [X] € y unos gastos de [X] €, que quedan aprobadas.'],
+  ['Presupuesto aprobado', 'Se presenta el presupuesto para el próximo ejercicio, por importe de [X] €, que queda aprobado. Las cuotas se mantienen sin cambios.'],
+  ['Derrama', 'Se acuerda una derrama de [X] €, a repartir según el coeficiente de participación de cada vivienda, pagadera en [X] plazos a partir de [mes].'],
+  ['Presupuestos de obra', 'Se presentan [X] presupuestos para la obra. Se acuerda contratar a la empresa [X] por un importe de [X] €.'],
+  ['Renovación de cargos', 'Se procede a la renovación de cargos, resultando elegidos: presidencia, vivienda [X]; vicepresidencia, vivienda [X].'],
+  ['Se informa', 'La presidencia informa a los propietarios sobre este punto, sin que sea necesario adoptar acuerdo.'],
+  ['Queda pendiente', 'Tras deliberar, se acuerda dejar este punto pendiente para una próxima junta, a la espera de [X].'],
+  ['Morosidad', 'Se informa de las deudas pendientes con la comunidad y se acuerda reclamarlas, incluso por vía judicial, conforme al artículo 21 de la Ley de Propiedad Horizontal, facultando a la presidencia para ello.'],
+  ['Ruegos y preguntas: ninguno', 'No se formulan ruegos ni preguntas.'],
+  ['Ruegos y preguntas', 'Se formulan los siguientes ruegos y preguntas: [X].'],
+];
+const newActa = () => ({ tipo: 'ordinaria', otra: '', fecha: isoDay(new Date()), hora: '19:00', conv: 'segunda', lugar: '', localidad: '', secretario: '', asist: {}, puntos: [], libre: '', fin: '', from: '' });
+let acta = null;
+const saveActa = () => save(ACTA_KEY, acta);
+
+// Última convocatoria de junta publicada en el tablón: datos guardados al publicarla desde Documentos o,
+// si es antigua, leídos de su texto
+const MONTHS_IDX = Object.fromEntries(MONTHS_FULL.map((m, i) => [m, i]));
+function lastConvocatoria() {
+  const posts = (st.board || []).filter((p) => p.meta?.tpl === 'ordinaria' || p.meta?.tpl === 'extraordinaria' || /^convocatoria de junta general/i.test(p.title || ''));
+  const p = posts.sort((a, b) => b.t - a.t)[0];
+  if (!p) return null;
+  if (p.meta?.v) {
+    const v = p.meta.v;
+    return { tipo: p.meta.tpl, fecha: v.fecha || '', hora: v.hora1 || '', lugar: v.lugar || '', localidad: v.localidad || '', puntos: lines(v.orden), title: p.title, t: p.t };
+  }
+  const txt = p.text || '';
+  const fm = /Fecha:\s*(?:\w+,\s*)?(\d{1,2}) de (\w+) de (\d{4})/i.exec(txt);
+  const fecha = fm && MONTHS_IDX[fm[2].toLowerCase()] !== undefined ? isoDay(new Date(+fm[3], MONTHS_IDX[fm[2].toLowerCase()], +fm[1])) : '';
+  const hora = (/Primera convocatoria:\s*(\d{1,2}:\d{2})/i.exec(txt) || [])[1] || '';
+  const lugar = ((/Lugar:\s*(.+)/i.exec(txt) || [])[1] || '').trim();
+  const orden = txt.split(/Orden del día:/i)[1] || '';
+  const puntos = orden.split('\n').map((l) => l.trim()).filter((l) => /^\d+[.)]\s+/.test(l)).map((l) => l.replace(/^\d+[.)]\s+/, ''));
+  return { tipo: /extraordinaria/i.test(p.title) ? 'extraordinaria' : 'ordinaria', fecha, hora, lugar, localidad: '', puntos, title: p.title, t: p.t };
+}
+function fillFromConvocatoria(c) {
+  acta.tipo = c.tipo;
+  if (c.fecha) acta.fecha = c.fecha;
+  if (c.hora) acta.hora = c.hora;
+  if (c.lugar) acta.lugar = c.lugar;
+  if (c.localidad) acta.localidad = c.localidad;
+  if (c.puntos.length) acta.puntos = c.puntos.map((t) => ({ titulo: t, texto: '' }));
+  acta.from = `${c.title} (${shortWhen(c.t)})`;
+  saveActa();
+}
+function openActa() {
+  track('/acta');
+  acta = load(ACTA_KEY, null);
+  if (!acta) {
+    acta = newActa();
+    const c = lastConvocatoria();
+    if (c) fillFromConvocatoria(c);
+    else acta.puntos = [{ titulo: 'Lectura y aprobación, si procede, del acta anterior.', texto: '' }, { titulo: 'Ruegos y preguntas.', texto: '' }];
+    saveActa();
+  }
+  openView('acta');
+}
+const actaUnits = () => (st.units || []).slice().sort((a, b) => a.label.localeCompare(b.label, 'es', { numeric: true }));
+function actaCounts() {
+  const units = actaUnits();
+  const p = units.filter((u) => acta.asist[u.mid]?.s === 'p').length;
+  const r = units.filter((u) => acta.asist[u.mid]?.s === 'r').length;
+  return { p, r, n: units.length };
+}
+function renderActa(body) {
+  const c = lastConvocatoria();
+  const k = actaCounts();
+  const units = actaUnits();
+  const opt = (v, cur, label) => `<option value="${v}" ${v === cur ? 'selected' : ''}>${esc(label)}</option>`;
+  $('view-sub').textContent = acta.from ? `Datos de: ${acta.from}` : 'Borrador guardado en este móvil';
+  body.innerHTML = `
+    <section class="card stack">
+      <p class="label">Reunión</p>
+      ${c ? `<button class="ghost-btn sm-btn" type="button" data-load-conv>${icon('board', 15)} Cargar la última convocatoria del tablón</button>` : '<p class="small muted">No hay ninguna convocatoria de junta publicada en el tablón: rellena los datos a mano.</p>'}
+      <p class="field-label">Tipo</p>
+      <select class="select" data-f="tipo">${opt('ordinaria', acta.tipo, 'Junta General Ordinaria')}${opt('extraordinaria', acta.tipo, 'Junta General Extraordinaria')}${opt('otra', acta.tipo, 'Otra reunión')}</select>
+      ${acta.tipo === 'otra' ? `<input class="title-input" data-f="otra" maxlength="80" placeholder="Nombre de la reunión" value="${esc(acta.otra)}" />` : ''}
+      <div class="gen-grid">
+        <div class="stack"><p class="field-label">Fecha</p><input class="title-input" type="date" data-f="fecha" value="${esc(acta.fecha)}" /></div>
+        <div class="stack"><p class="field-label">Hora de inicio</p><input class="title-input" type="time" data-f="hora" value="${esc(acta.hora)}" /></div>
+      </div>
+      <p class="field-label">Convocatoria</p>
+      <div class="seg" role="group">
+        <button type="button" data-conv="primera" class="${acta.conv === 'primera' ? 'on' : ''}">Primera</button>
+        <button type="button" data-conv="segunda" class="${acta.conv === 'segunda' ? 'on' : ''}">Segunda</button>
+      </div>
+      <p class="field-label">Lugar</p>
+      <input class="title-input" data-f="lugar" maxlength="120" placeholder="Portal, local de la comunidad…" value="${esc(acta.lugar)}" />
+      <p class="field-label">Localidad (para el encabezado) <span class="muted">(opcional)</span></p>
+      <input class="title-input" data-f="localidad" maxlength="60" placeholder="Madrid" value="${esc(acta.localidad)}" />
+      <p class="field-label">Secretario/a de la reunión <span class="muted">(opcional)</span></p>
+      <input class="title-input" data-f="secretario" maxlength="80" placeholder="Por defecto, el propio presidente" value="${esc(acta.secretario)}" />
+    </section>
+
+    <section class="card stack">
+      <p class="label">Asistentes · ${plural(k.p, 'presente', 'presentes')} · ${plural(k.r, 'representada', 'representadas')} · de ${k.n}</p>
+      <div class="row-btns"><button class="ghost-btn sm-btn" type="button" data-all-p>Todas presentes</button><button class="ghost-btn sm-btn" type="button" data-all-a>Ninguna</button></div>
+      <div class="asist-list">${units.map((u) => {
+        const a = acta.asist[u.mid] || { s: 'a', by: '' };
+        return `<div class="asist-row ${a.s}" data-mid="${u.mid}">
+          <b>${esc(u.label)}${u.role ? ` <small>${ROLE_NAME[u.role]}</small>` : ''}</b>
+          <div class="seg asist-seg">
+            <button type="button" data-st="a" class="${a.s === 'a' ? 'on' : ''}">Ausente</button>
+            <button type="button" data-st="p" class="${a.s === 'p' ? 'on' : ''}">${icon('check', 14, 2)} Presente</button>
+            <button type="button" data-st="r" class="${a.s === 'r' ? 'on' : ''}">Representada</button>
+          </div>
+          ${a.s === 'r' ? `<input class="title-input asist-by" data-by="${u.mid}" maxlength="80" placeholder="Representada por (vivienda o nombre)" value="${esc(a.by)}" />` : ''}
+        </div>`;
+      }).join('')}</div>
+    </section>
+
+    <section class="card stack">
+      <p class="label">Orden del día y acuerdos</p>
+      ${acta.puntos.map((p, i) => `
+        <div class="acta-punto" data-i="${i}">
+          <div class="opt-edit"><span class="punto-n">${i + 1}.</span><input class="title-input" data-pt="${i}" maxlength="200" placeholder="Punto del orden del día" value="${esc(p.titulo)}" />
+            <button class="icon-btn sm" type="button" data-rm-pt="${i}" aria-label="Quitar el punto">${icon('close', 15)}</button></div>
+          <select class="select tipo-sel" data-tipo="${i}"><option value="">Añadir un texto tipo…</option>${TEXTOS_TIPO.map(([n], j) => `<option value="${j}">${esc(n)}</option>`).join('')}</select>
+          <textarea class="text-input" data-tx="${i}" rows="3" placeholder="Deliberación y acuerdo adoptado">${esc(p.texto)}</textarea>
+        </div>`).join('')}
+      <button class="ghost-btn" type="button" data-add-pt>${icon('plus', 16)} Añadir punto</button>
+      <p class="small muted">Los textos tipo se añaden al final del punto; cambia lo que va entre corchetes [X].</p>
+    </section>
+
+    <section class="card stack">
+      <p class="label">Otros asuntos y observaciones</p>
+      <textarea class="text-input" data-f="libre" rows="5" placeholder="Texto libre: cualquier cosa que deba constar en el acta">${esc(acta.libre)}</textarea>
+      <p class="field-label">Hora de cierre</p>
+      <input class="title-input" type="time" data-f="fin" value="${esc(acta.fin)}" />
+    </section>
+
+    <p class="form-error" id="acta-err" role="alert"></p>
+    <div class="row-btns end">
+      <button class="ghost-btn danger" type="button" data-reset>${icon('trash', 16)} Empezar de nuevo</button>
+      <button class="ghost-btn" type="button" data-pub>${icon('board', 18)} Publicar en el tablón</button>
+      <button class="done-btn" type="button" data-pdf>${icon('pdf', 18, 1.6)} Ver PDF</button>
+    </div>`;
+  // Campos: se guardan al escribir
+  body.querySelectorAll('[data-f]').forEach((el) => el.addEventListener(el.tagName === 'SELECT' ? 'change' : 'input', () => {
+    acta[el.dataset.f] = el.value;
+    saveActa();
+    if (el.dataset.f === 'tipo') renderActa(body);
+  }));
+  body.querySelectorAll('[data-conv]').forEach((b) => b.addEventListener('click', () => { acta.conv = b.dataset.conv; saveActa(); renderActa(body); }));
+  body.querySelector('[data-load-conv]')?.addEventListener('click', () => confirmSheet({
+    title: '¿Cargar la última convocatoria?', text: `${c.title}. Se rellenarán el tipo, la fecha, la hora, el lugar y el orden del día (se sustituyen los puntos actuales).`, ok: 'Cargar',
+    run: async () => { fillFromConvocatoria(c); renderActa(body); },
+  }));
+  const setSt = (mid, s) => { acta.asist[mid] = { s, by: acta.asist[mid]?.by || '' }; saveActa(); };
+  body.querySelectorAll('.asist-row [data-st]').forEach((b) => b.addEventListener('click', () => { setSt(b.closest('.asist-row').dataset.mid, b.dataset.st); const top = body.scrollTop; renderActa(body); body.scrollTop = top; }));
+  body.querySelectorAll('[data-by]').forEach((el) => el.addEventListener('input', () => { acta.asist[el.dataset.by].by = el.value; saveActa(); }));
+  body.querySelector('[data-all-p]').addEventListener('click', () => { units.forEach((u) => setSt(u.mid, 'p')); const top = body.scrollTop; renderActa(body); body.scrollTop = top; });
+  body.querySelector('[data-all-a]').addEventListener('click', () => { units.forEach((u) => setSt(u.mid, 'a')); const top = body.scrollTop; renderActa(body); body.scrollTop = top; });
+  body.querySelectorAll('[data-pt]').forEach((el) => el.addEventListener('input', () => { acta.puntos[el.dataset.pt].titulo = el.value; saveActa(); }));
+  body.querySelectorAll('[data-tx]').forEach((el) => el.addEventListener('input', () => { acta.puntos[el.dataset.tx].texto = el.value; saveActa(); }));
+  body.querySelectorAll('[data-tipo]').forEach((el) => el.addEventListener('change', () => {
+    if (el.value === '') return;
+    const i = Number(el.dataset.tipo);
+    const add = TEXTOS_TIPO[Number(el.value)][1];
+    acta.puntos[i].texto = acta.puntos[i].texto.trim() ? `${acta.puntos[i].texto.trim()}\n${add}` : add;
+    saveActa();
+    const ta = body.querySelector(`[data-tx="${i}"]`);
+    ta.value = acta.puntos[i].texto;
+    el.value = '';
+    ta.focus();
+  }));
+  body.querySelectorAll('[data-rm-pt]').forEach((b) => b.addEventListener('click', () => { acta.puntos.splice(Number(b.dataset.rmPt), 1); saveActa(); const top = body.scrollTop; renderActa(body); body.scrollTop = top; }));
+  body.querySelector('[data-add-pt]').addEventListener('click', () => { acta.puntos.push({ titulo: '', texto: '' }); saveActa(); const top = body.scrollTop; renderActa(body); body.scrollTop = top; body.querySelector(`[data-pt="${acta.puntos.length - 1}"]`)?.focus(); });
+  body.querySelector('[data-reset]').addEventListener('click', () => confirmSheet({
+    title: '¿Empezar un acta nueva?', text: 'Se borrará el borrador de este móvil.', ok: 'Empezar de nuevo', danger: true,
+    run: async () => { save(ACTA_KEY, null); acta = null; openActa(); },
+  }));
+  body.querySelector('[data-pdf]').addEventListener('click', async () => {
+    try { await openPdfViewer(formalDoc(actaSpec()), actaFile()); } catch (_) { $('acta-err').textContent = 'No se ha podido crear el PDF.'; }
+  });
+  body.querySelector('[data-pub]').addEventListener('click', () => {
+    const spec = actaSpec();
+    confirmSheet({
+      title: '¿Publicar el acta en el tablón?', text: 'Se publicará para todos los vecinos con el PDF adjunto, les llegará un aviso y se guardará en el Archivo, en «Actas».', ok: 'Publicar',
+      run: async () => {
+        const meta = await uploadFile(actaFile(), 'application/pdf', formalDoc(spec).build());
+        await call('post', { title: `${spec.title}${actaDateText() ? ` del ${actaDateText()}` : ''}`, text: `Se adjunta el acta de la reunión del ${actaDateText()}.`, files: [meta], archCat: 'Actas' });
+        archDocs = null;
+        await refresh();
+        toast('Acta publicada en el tablón y guardada en el Archivo');
+      },
+    });
+  });
+}
+const actaTipoName = () => (acta.tipo === 'otra' ? (acta.otra.trim() || 'Reunión') : ACTA_TIPOS[acta.tipo]);
+const actaDateText = () => { const d = parseDay(acta.fecha); return d ? plainDate(d) : ''; };
+const actaFile = () => { const d = parseDay(acta.fecha) || new Date(); return `Acta ${actaTipoName()} ${pad(d.getDate())}-${pad(d.getMonth() + 1)}-${d.getFullYear()}.pdf`.replace(/[\\/:*?"<>|]/g, '-'); };
+function actaSpec() {
+  const d = parseDay(acta.fecha);
+  const units = actaUnits();
+  const pres = units.find((u) => u.role === 'pres');
+  const present = units.filter((u) => acta.asist[u.mid]?.s === 'p');
+  const repr = units.filter((u) => acta.asist[u.mid]?.s === 'r');
+  const tipo = actaTipoName();
+  const junta = acta.tipo !== 'otra';
+  const intro = `${acta.localidad ? `En ${acta.localidad}, ` : ''}${acta.lugar ? `en ${acta.lugar}, ` : ''}siendo las ${acta.hora || '[hora]'} horas del ${d ? longDate(d) : '[fecha]'}, se reúnen${junta ? ` en ${acta.conv} convocatoria` : ''} los propietarios de la comunidad ${st.community.name}${junta ? ', previamente convocados en tiempo y forma,' : ''} para celebrar ${junta ? 'la ' : ''}${tipo}, con el siguiente orden del día:`;
+  const blocks = [
+    { t: 'p', text: intro.charAt(0).toUpperCase() + intro.slice(1) },
+    { t: 'list', items: acta.puntos.map((p) => p.titulo.trim()).filter(Boolean) },
+    { t: 'h', text: 'Asistentes' },
+    { t: 'p', text: present.length ? `Presentes (${present.length}): ${present.map((u) => u.label).join(', ')}.` : 'No hay propietarios presentes.' },
+    ...(repr.length ? [{ t: 'p', text: `Representadas (${repr.length}): ${repr.map((u) => `${u.label}${acta.asist[u.mid].by.trim() ? ` (por ${acta.asist[u.mid].by.trim()})` : ''}`).join(', ')}.` }] : []),
+    { t: 'p', text: `En total asisten ${present.length + repr.length} de las ${units.length} viviendas y locales de la comunidad.` },
+    { t: 'p', text: `Preside la reunión el Presidente${pres ? ` (vivienda ${pres.label})` : ''}${acta.secretario.trim() ? ` y actúa como secretario/a ${acta.secretario.trim()}` : ', que actúa también como secretario'}.` },
+    { t: 'h', text: 'Desarrollo de la sesión' },
+    ...acta.puntos.filter((p) => p.titulo.trim() || p.texto.trim()).map((p, i) => ({ t: 'point', n: i + 1, title: p.titulo.trim() || 'Punto sin título', text: p.texto.trim() || 'Sin acuerdos que hacer constar.' })),
+    ...(acta.libre.trim() ? [{ t: 'h', text: 'Otros asuntos y observaciones' }, { t: 'p', text: acta.libre.trim() }] : []),
+    { t: 'p', text: `Y no habiendo más asuntos que tratar, se levanta la sesión${acta.fin ? ` siendo las ${acta.fin} horas` : ''}, de lo que como secretario/a doy fe, con el visto bueno del Presidente.` },
+    { t: 'sign2', left: 'Vº Bº El Presidente', right: acta.secretario.trim() ? 'El/La Secretario/a' : 'El Secretario' },
+  ];
+  return { title: `Acta de la ${tipo}`, subtitle: d ? plainDate(d) : '', blocks };
+}
+
 // ---------- Menú ⋯ ----------
 
 function menuItems() {
@@ -3639,6 +3884,7 @@ function menuItems() {
   if (!sess.code) items.push({ icon: 'mail', label: 'Solicitar mi código', run: openRequestSheet });
   if (sess.code && st) items.push({ icon: 'archive', label: 'Archivo', run: () => openView('archive') });
   if (sess.code && st && isAdmin()) items.push({ icon: 'pdf', label: 'Documentos', run: openDocsSheet });
+  if (sess.code && st && isAdmin()) items.push({ icon: 'edit', label: 'Acta de reunión', run: openActa });
   if (sess.code && st) items.push({ icon: pushState() === 'on' ? 'bell' : 'bellOff', label: `Avisos: ${pushState() === 'on' ? 'activados' : 'desactivados'}`, run: openPushSheet });
   if (sess.code && st) items.push({ icon: 'logout', label: 'Salir de esta comunidad', danger: true, run: () => confirmSheet({
     title: '¿Salir de la comunidad?', text: 'Se quitará tu código de este dispositivo. Para volver a entrar necesitarás escribirlo de nuevo.', ok: 'Salir', danger: true,

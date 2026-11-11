@@ -715,3 +715,17 @@ body.in-call { overflow: hidden; }
 .arch-doc.dragging .file-chip { box-shadow: 0 10px 28px var(--shadow); border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); background: var(--surface-solid); }
 .rows.sorting { -webkit-user-select: none; user-select: none; }
 .arch-hint { display: flex; align-items: center; gap: 6px; margin: 0 2px; }
+
+/* ---------- Acta de reunión ---------- */
+.asist-list { display: grid; gap: 8px; }
+.asist-row { display: grid; gap: 6px; padding: 10px; border: 1px solid var(--line); border-radius: 14px; }
+.asist-row.p { border-color: color-mix(in srgb, var(--ok) 50%, var(--line)); }
+.asist-row.r { border-color: color-mix(in srgb, var(--accent) 50%, var(--line)); }
+.asist-row b { font-size: 15px; font-weight: 600; }
+.asist-row b small { font-size: 11px; color: var(--gold); font-weight: 600; margin-left: 4px; }
+.asist-seg button { padding: 8px 4px; font-size: 12.5px; display: inline-flex; align-items: center; justify-content: center; gap: 3px; }
+.asist-row.p .asist-seg button.on { background: linear-gradient(135deg, #16a34a, #15803d); }
+.asist-by { font-size: 15px; padding: 10px 12px; }
+.acta-punto { display: grid; gap: 6px; padding: 10px; border: 1px solid var(--line); border-radius: 14px; }
+.punto-n { flex: 0 0 auto; font-weight: 700; color: var(--accent); }
+.tipo-sel { font-size: 14px; padding: 10px 12px; }
