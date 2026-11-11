@@ -403,13 +403,11 @@ function pollResult(poll, com) {
   const max = Math.max(0, ...counts);
   const winners = max > 0 ? poll.opts.filter((_, i) => counts[i] === max) : [];
   const units = Object.keys(com.units).length;
-  // Para aprobarse, una opción necesita más del 50 % de los votos emitidos y que vote al menos
-  // la mitad de las viviendas (quórum)
-  const need = Math.ceil(units / 2);
-  const quorum = total > 0 && total >= need;
-  const top = counts.findIndex((n) => n * 2 > total);
-  const majority = top >= 0 ? poll.opts[top] : '';
-  return { counts, total, units, winners, need, quorum, majority, approved: quorum && majority ? majority : '', rule: 1 };
+  // Una opción se aprueba cuando la vota más de la mitad de TODAS las viviendas (29 → 15),
+  // no de las que votan; en cuanto llega, la encuesta se cierra sola
+  const need = Math.floor(units / 2) + 1;
+  const top = counts.findIndex((n) => n >= need);
+  return { counts, total, units, winners, need, approved: top >= 0 ? poll.opts[top] : '', rule: 2 };
 }
 async function closePoll(cid, com, poll, by) {
   poll.closed = Date.now();
@@ -418,10 +416,9 @@ async function closePoll(cid, com, poll, by) {
   const lines = poll.opts.map((o, i) => `• ${o}: ${r.counts[i]} ${r.counts[i] === 1 ? 'voto' : 'votos'}${r.total ? ` (${Math.round((r.counts[i] / r.total) * 100)} %)` : ''}`);
   const most = r.winners.length === 1 ? `la más votada es «${r.winners[0]}»` : `empate entre ${r.winners.map((w) => `«${w}»`).join(' y ')}`;
   const verdict = !r.total ? 'No ha votado nadie: no se aprueba ninguna opción.'
-    : r.approved ? `Aprobada: «${r.approved}», con más del 50 % de los votos y quórum suficiente.`
-    : !r.quorum ? `No se aprueba: no hay quórum (han votado ${r.total} de ${r.units} viviendas y hacía falta al menos ${r.need}).`
-    : `No se aprueba: ninguna opción supera el 50 % de los votos (${most}).`;
-  const text = `${verdict}\n\n${lines.join('\n')}\n\nHan votado ${r.total} de ${r.units} viviendas (quórum: ${r.need}). Para aprobarse, una opción necesita más del 50 % de los votos y que vote al menos la mitad de las viviendas.`;
+    : r.approved ? `Aprobada: «${r.approved}», con el voto de ${r.counts[poll.opts.indexOf(r.approved)]} de las ${r.units} viviendas.`
+    : `No se aprueba: ninguna opción ha llegado a ${r.need} votos (${most}).`;
+  const text = `${verdict}\n\n${lines.join('\n')}\n\nHan votado ${r.total} de ${r.units} viviendas. Para aprobarse, una opción necesita el voto de más de la mitad de todas las viviendas: ${r.need} de ${r.units}.`;
   await addPost(cid, { title: `Resultado de la encuesta: ${poll.q}`, text, by: by || '', role: by ? roleOf(com, by) : 'auto', kind: 'result', poll: poll.id });
   await notify(cid, com, 'all', '', { title: com.name, body: `📊 Resultado de la encuesta «${short(poll.q, 80)}»: ${short(verdict, 90)}`, go: 'board', tag: `poll-${poll.id}` });
 }
@@ -938,8 +935,11 @@ module.exports = async (req, res) => {
         if (!Number.isInteger(opt) || opt < 0 || opt >= p.opts.length) return bad();
         p.votes = p.votes || {};
         p.votes[mid] = opt; // un voto por vivienda; se puede cambiar mientras esté abierta
+        // Con más de la mitad de todas las viviendas a favor de una opción, queda aprobada y se cierra
+        const approved = pollResult(p, com).approved;
+        if (approved) await closePoll(cid, com, p, '');
         await setJSON(K.polls(cid), polls);
-        return ok();
+        return ok({ approved: approved || undefined });
       }
       case 'poll-close':
       case 'poll-del': {
