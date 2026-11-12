@@ -1,7 +1,7 @@
 'use strict';
 
 // Versión de la app (se ve en Información). Arreglos y ajustes: 0.x.y; novedades: 0.x.0.
-const APP_VERSION = '0.21.0';
+const APP_VERSION = '0.22.0';
 const APP_NAME = 'Mi comunidad';
 // Uso de la app en Vercel Analytics: cada sección cuenta como una página virtual (nunca datos).
 const track = (path) => { try { window.va?.('pageview', { path }); } catch (_) { /* sin analítica */ } };
@@ -1039,7 +1039,7 @@ function openRoomEditor(room) {
 // Tocar un mensaje del chat: responder (todos), copiar y, para los cargos, moderar.
 // Tocar la cita de una respuesta lleva al mensaje original.
 $('view-body').addEventListener('click', (e) => {
-  if (view?.name !== 'chat') return;
+  if (!['chat', 'contact', 'thread'].includes(view?.name)) return;
   const q = e.target.closest('[data-jump]');
   if (q) {
     const el = $('view-body').querySelector(`.msg[data-key="${CSS.escape(q.dataset.jump)}"]`);
@@ -1049,10 +1049,37 @@ $('view-body').addEventListener('click', (e) => {
   if (e.target.closest('a, [data-att]') || String(getSelection?.() || '').trim()) return;
   const el = e.target.closest('.msg');
   if (!el) return;
+  if (view.name !== 'chat') {
+    const d = dmMsgs.find((x) => x.id === el.dataset.key);
+    if (d) openDmMsgActions(d);
+    return;
+  }
   const m = chatMsgs.find((x) => String(x.s) === el.dataset.key);
   if (!m) return;
   openChatMsgActions(m);
 });
+// Conversación con la presidencia: responder o copiar
+function openDmMsgActions(m) {
+  const who = dmWho(m.by, m.byRole, m.byLabel);
+  const sheet = openSheet('Mensaje');
+  sheet.innerHTML = `
+    <div class="sheet-head"><h2 class="sheet-title">${who === 'Tú' ? 'Tu mensaje' : esc(who === 'Presidencia' ? 'Presidencia' : `Vivienda ${who}`)}</h2>
+      <button class="icon-btn sm" type="button" data-close aria-label="Cerrar">${icon('close', 18)}</button></div>
+    <p class="small muted" style="white-space:pre-wrap">«${esc(msgExcerpt(m).slice(0, 200))}${msgExcerpt(m).length > 200 ? '…' : ''}»</p>
+    <div class="stack">
+      <button class="ghost-btn" type="button" data-reply>${icon('reply', 18)} Responder</button>
+      ${m.text ? `<button class="ghost-btn" type="button" data-copy>${icon('copy', 18)} Copiar el texto</button>` : ''}
+    </div>`;
+  sheet.querySelector('[data-close]').addEventListener('click', closeSheet);
+  sheet.querySelector('[data-reply]').addEventListener('click', () => {
+    closeSheet();
+    setReply({ s: m.id, who: who === 'Tú' ? 'ti' : who === 'Presidencia' ? 'la presidencia' : who, text: msgExcerpt(m).slice(0, 160) });
+  });
+  sheet.querySelector('[data-copy]')?.addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText(m.text); toast('Texto copiado'); } catch (_) { toast('No se ha podido copiar'); }
+    closeSheet();
+  });
+}
 const msgExcerpt = (m) => m.text || (m.files?.length ? (m.files.every((f) => /^image\//.test(f.type)) ? '📷 Foto' : `📎 ${m.files[0].name}`) : '');
 function openChatMsgActions(m) {
   const admin = isAdmin();
@@ -1746,11 +1773,15 @@ function startDM(mid) {
   view.tick = () => pollDM(false);
   view.timer = setInterval(() => { if (document.visibilityState === 'visible') pollDM(false); }, DM_EVERY_MS);
   composerState.send = async (text) => {
-    await call('dm-send', { text, mid: admin ? mid : undefined });
+    const re = composerState.reply?.s;
+    await call('dm-send', { text, mid: admin ? mid : undefined, re });
+    if (composerState.reply?.s === re) setReply(null);
     await pollDM(true);
   };
   composerState.attach = async (files, text) => {
-    await call('dm-send', { text, files, mid: admin ? mid : undefined });
+    const re = composerState.reply?.s;
+    await call('dm-send', { text, files, mid: admin ? mid : undefined, re });
+    if (composerState.reply?.s === re) setReply(null);
     await pollDM(true);
   };
   showComposer(true, '', admin ? 'Responde a esta vivienda' : 'Escribe a la presidencia');
@@ -1777,6 +1808,11 @@ async function pollDM(scroll) {
   persist();
   if (changed || scroll) renderDM(scroll);
 }
+// Nombre de quien escribió un mensaje de la conversación, para citas y respuestas
+function dmWho(by, role, label) {
+  if (by === st.me.mid) return 'Tú';
+  return isAdmin() ? label : role ? 'Presidencia' : label;
+}
 function renderDM(scroll) {
   const body = $('view-body');
   const stick = scroll || nearBottom(body);
@@ -1791,7 +1827,8 @@ function renderDM(scroll) {
     let who = '';
     if (admin) who = fromBoard ? (m.by === me.mid ? '' : `${m.byLabel}`) : m.byLabel;
     else who = fromBoard ? 'Presidencia' : '';
-    return { key: m.id, t: m.t, mine, who, role: fromBoard && (admin ? m.by !== me.mid : true) ? m.byRole : '', text: m.text, files: m.files, board: fromBoard && !mine };
+    const re = m.re && { key: m.re.id, who: dmWho(m.re.by, m.re.role, m.re.byLabel), text: m.re.text };
+    return { key: m.id, t: m.t, mine, who, role: fromBoard && (admin ? m.by !== me.mid : true) ? m.byRole : '', text: m.text, files: m.files, board: fromBoard && !mine, re };
   });
   body.innerHTML = list.length ? messagesHTML(list, intro)
     : `${intro}<div class="empty"><span class="tile-ico">${icon('mail', 28)}</span><h3>${admin ? 'Sin mensajes' : 'Escribe tu consulta'}</h3><p>${admin ? 'Escribe el primero a esta vivienda.' : 'Avisos, quejas o propuestas: llegarán al presidente y al vicepresidente.'}</p></div>`;
@@ -3568,20 +3605,20 @@ const TEMPLATES = [
     build: (v) => ({
       title: 'Nueva app de la comunidad',
       blocks: [
-        { t: 'p', text: 'La comunidad estrena una aplicación para el móvil. Con ella podrás leer los anuncios de la presidencia, votar en las encuestas, escribir a la presidencia de forma privada y hablar con tus vecinos. No hace falta dar ningún dato personal: ni nombre, ni teléfono, ni correo.' },
+        { t: 'p', text: 'La comunidad estrena una aplicación para el móvil. Con ella podrás leer los anuncios de la presidencia, votar en las encuestas, escribir a la presidencia de forma privada, hablar con tus vecinos y consultar el Archivo con los documentos que deberían tener todos los vecinos (actas, presupuestos, estatutos, seguros…). No hace falta dar ningún dato personal: ni nombre, ni teléfono, ni correo.' },
         { t: 'h', text: 'Cómo empezar' },
         { t: 'step', n: 1, text: 'Abre en el móvil esta dirección:' },
         { t: 'big', text: appUrl(), size: 22 },
         { t: 'step', n: 2, text: 'Pulsa «Solicitar mi código» y escribe el código de la comunidad y tu piso y puerta:' },
         { t: 'big', text: st.community.pub, size: 26, mono: true },
         { t: 'step', n: 3, text: 'En unos días recibirás en tu buzón el código personal de tu vivienda. Escríbelo en «Ya tengo mi código» y listo.' },
-        { t: 'step', n: 4, text: 'Consejo: añade la app a la pantalla de inicio del móvil para tenerla siempre a mano y activa los avisos:' },
+        { t: 'step', n: 4, text: 'Consejo: añade la app a la pantalla de inicio y activa los avisos:' },
         { t: 'list', bullets: true, indent: 36, items: ['iPhone (Safari): botón Compartir › Añadir a pantalla de inicio › Añadir.', 'Android (Chrome): menú de los tres puntos, arriba a la derecha › Instalar aplicación (o Añadir a pantalla de inicio) › Instalar.'] },
         ...(v.obs ? [{ t: 'gap', h: 4 }, { t: 'p', text: v.obs }] : []),
         { t: 'note', text: 'Cada vivienda tiene un único código, intransferible, que pueden usar todas las personas que viven en ella, cada una en su móvil. Si lo pierdes, puedes volver a solicitarlo desde la app.' },
         { t: 'close', place: v.localidad, sign: v.firma },
       ],
-      board: { title: 'Nueva app de la comunidad', text: `La comunidad ya tiene app: ${location.origin}${location.pathname}\n\nPara entrar, pulsa «Solicitar mi código» con el código de la comunidad ${st.community.pub} y tu piso y puerta. Recibirás tu código personal en el buzón.${v.obs ? `\n\n${v.obs}` : ''}` },
+      board: { title: 'Nueva app de la comunidad', text: `La comunidad ya tiene app: ${location.origin}${location.pathname}\n\nPara entrar, pulsa «Solicitar mi código» con el código de la comunidad ${st.community.pub} y tu piso y puerta. Recibirás tu código personal en el buzón.\n\nEn la app también está el Archivo con los documentos que deberían tener todos los vecinos (actas, presupuestos, estatutos, seguros…).${v.obs ? `\n\n${v.obs}` : ''}` },
     }),
   },
   {
@@ -4269,6 +4306,7 @@ const HELP_ALL = [
     'Una conversación <b>privada</b> entre tu vivienda y la presidencia: solo la leen el presidente y el vicepresidente. Sirve para avisos, quejas, consultas o propuestas.',
     'Puedes adjuntar <b>fotos y archivos</b> con el clip (hasta 10 MB). Los adjuntos se guardan un mes.',
     'Con los botones de arriba puedes <b>llamar</b> a la presidencia por voz o por videollamada.',
+    'Para <b>responder a un mensaje concreto</b>, tócalo y elige «Responder», igual que en los chats.',
     'Cuando entra una persona nueva en los cargos, las conversaciones anteriores se borran.',
   ] },
   { icon: 'chat', title: 'Chats de vecinos', items: [

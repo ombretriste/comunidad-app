@@ -896,7 +896,7 @@ module.exports = async (req, res) => {
         if (!admin && who !== mid) return needAdmin();
         if (!com.units[who]) return bad('gone', 404);
         const raw = await redis('LRANGE', K.dm(cid, who), 0, -1);
-        const msgs = (raw || []).map((m) => JSON.parse(m)).map((m) => ({ ...m, byLabel: unitName(com, m.by), byRole: m.role || '' }));
+        const msgs = (raw || []).map((m) => JSON.parse(m)).map((m) => ({ ...m, byLabel: unitName(com, m.by), byRole: m.role || '', re: m.re ? { ...m.re, byLabel: unitName(com, m.re.by) } : undefined }));
         return res.status(200).json({ msgs, label: unitName(com, who) });
       }
       case 'dm-send': {
@@ -909,7 +909,14 @@ module.exports = async (req, res) => {
         const fromBoard = who !== mid; // respuesta de la presidencia
         let files = [];
         try { files = await attachFiles(cid, body.files); } catch (e) { return bad('file-missing', 409); }
-        const msg = { id: randomId(6), t: Date.now(), by: mid, role: fromBoard ? role : '', text, ...(files.length ? { files } : {}) };
+        // respuesta a un mensaje concreto de esta conversación
+        let re;
+        if (typeof body.re === 'string' && /^[a-f0-9]{6,16}$/.test(body.re)) {
+          const list = await redis('LRANGE', K.dm(cid, who), 0, -1);
+          const o = (list || []).map((m) => JSON.parse(m)).find((m) => m.id === body.re);
+          if (o) re = { id: o.id, by: o.by, role: o.role || '', text: short(o.text || (o.files?.length ? filesNote(o.files) : ''), 160) };
+        }
+        const msg = { id: randomId(6), t: Date.now(), by: mid, role: fromBoard ? role : '', text, ...(files.length ? { files } : {}), ...(re ? { re } : {}) };
         const preview = text || filesNote(files);
         await pipeline([
           ['RPUSH', K.dm(cid, who), JSON.stringify(msg)],
