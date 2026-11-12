@@ -51,6 +51,7 @@
 //   POST { action: 'arch-list', code }                    -> { docs: [{ id, fid, parts, name, type, size, cat, t, post? }] }
 //   POST { action: 'arch-add', code, files, cat }         (cargos; los adjuntos del tablón entran solos con body.archCat)
 //   POST { action: 'arch-edit', code, id, cat?, name? }   · POST { action: 'arch-del', code, id }   (cargos)
+//   POST { action: 'contact-save' | 'contact-del' | 'contact-order', code, … }   (cargos: contactos de la comunidad; los ven todos en state.contacts)
 //   POST { action: 'arch-order', code, ids }              (cargos: orden manual, de arriba abajo)
 //   POST { action: 'icon-set', code, data }              (cargos: icono de la comunidad, JPEG en data URL; '' lo quita)
 //   POST { action: 'icon-get', code }                     -> { data }
@@ -172,6 +173,22 @@ const normCode = (c) => String(c || '').toUpperCase().replace(/[^0-9A-Z]/g, '');
 const fmtCode = (c) => c.match(/.{1,4}/g).join('-');
 const codeHash = (c) => sha256hex(`micomunidad:${normCode(c)}`);
 const cleanText = (s, max) => String(s ?? '').replace(/\r\n?/g, '\n').replace(/[\u0000-\u0008\u000b-\u001f]/g, '').trim().slice(0, max);
+// Contactos de la comunidad (administrador de fincas, seguro, videovigilancia…): los editan los cargos
+const MAX_CONTACTS = 40;
+function cleanContact(c) {
+  const phone = (v) => { const t = cleanText(v, 30).replace(/\s+/g, ' '); return /^\+?[\d][\d\s().-]{2,28}$/.test(t) ? t : ''; };
+  const email = cleanText(c.email, 120);
+  let web = cleanText(c.web, 200);
+  if (web && !/^https?:\/\//i.test(web)) web = `https://${web}`;
+  try { if (web) { const u = new URL(web); if (!/^https?:$/.test(u.protocol)) web = ''; else web = u.href; } } catch (_) { web = ''; }
+  return {
+    cat: cleanText(c.cat, 40).replace(/\s+/g, ' ') || 'Otros',
+    name: cleanText(c.name, 80).replace(/\s+/g, ' '),
+    phone: phone(c.phone), phone2: phone(c.phone2),
+    email: /^[^\s@<>"]{1,64}@[^\s@<>"]+\.[a-z]{2,}$/i.test(email) ? email : '',
+    web, notes: cleanText(c.notes, 600),
+  };
+}
 const cleanLabel = (s) => cleanText(s, MAX_LABEL).replace(/\s+/g, ' ');
 const sameLabel = (a, b) => a.toLowerCase().replace(/[\s.ºª°-]/g, '') === b.toLowerCase().replace(/[\s.ºª°-]/g, '');
 
@@ -192,6 +209,7 @@ const K = {
   file: (cid, fid, part) => `vec:c:${cid}:f:${fid}:${part}`,
   icon: (cid) => `vec:c:${cid}:icon`,
   arch: (cid) => `vec:c:${cid}:arch`,
+  contacts: (cid) => `vec:c:${cid}:contacts`,
   sigreq: (cid) => `vec:c:${cid}:sigreq`,
   roomChat: (cid, room) => (room === 'general' ? `vec:c:${cid}:chat` : `vec:c:${cid}:chat:${room}`),
   roomSeq: (cid, room) => (room === 'general' ? `vec:c:${cid}:cs` : `vec:c:${cid}:cs:${room}`),
@@ -608,13 +626,14 @@ module.exports = async (req, res) => {
       case 'state': {
         if (Date.now() - (me.seen || 0) > 3600e3) { me.seen = Date.now(); await saveCom(); }
         const rooms = visibleRooms(com, mid);
-        const [board, polls, tails, dmIndex, reqs, ringsRaw] = await Promise.all([
+        const [board, polls, tails, dmIndex, reqs, ringsRaw, contacts] = await Promise.all([
           getJSON(K.board(cid), []),
           loadPolls(cid, com),
           pipeline(rooms.flatMap((r) => [['LRANGE', K.roomChat(cid, r.id), -1, -1], ['ZCOUNT', K.gc(cid, r.id), Date.now() - GC_STALE_MS, '+inf']])),
           redis('HGETALL', K.dmIndex(cid)),
           admin ? getJSON(K.req(cid), []) : [],
           redis('HGETALL', K.rings(cid)),
+          getJSON(K.contacts(cid), []),
         ]);
         // Llamadas sonando para esta vivienda: de la presidencia a ella, o (cargos) de un vecino a la presidencia
         const rings = [];
@@ -630,6 +649,7 @@ module.exports = async (req, res) => {
           community: { name: com.name, pub: com.pub, chatOpen: com.chatOpen, iconV: com.iconV || 0 },
           me: { mid, label: me.label, role, blocked: !!me.blocked },
           board: board.slice().reverse().map((p) => ({ ...p, byLabel: p.by ? unitName(com, p.by) : '' })),
+          contacts,
           polls: polls.slice().reverse().map((p) => pollView(p, com, mid)),
           rooms: rooms.map((r, i) => {
             const tail = tails[i * 2];
@@ -1140,6 +1160,34 @@ module.exports = async (req, res) => {
         }
         const docs = await getJSON(K.arch(cid), []);
         return res.status(200).json({ docs: docs.slice().reverse() });
+      }
+      // ----- Contactos -----
+      case 'contact-save': {
+        if (!admin) return needAdmin();
+        const c = cleanContact(body);
+        if (!c.name || !(c.phone || c.phone2 || c.email || c.web || c.notes)) return bad();
+        const list = await getJSON(K.contacts(cid), []);
+        const id = typeof body.id === 'string' ? body.id : '';
+        const i = id ? list.findIndex((x) => x.id === id) : -1;
+        if (id && i < 0) return bad('gone', 404);
+        if (i >= 0) list[i] = { ...list[i], ...c, t: Date.now() };
+        else { if (list.length >= MAX_CONTACTS) return bad('too-many', 429); list.push({ id: randomId(6), ...c, t: Date.now() }); }
+        await setJSON(K.contacts(cid), list);
+        return ok();
+      }
+      case 'contact-del': {
+        if (!admin) return needAdmin();
+        const list = await getJSON(K.contacts(cid), []);
+        await setJSON(K.contacts(cid), list.filter((x) => x.id !== body.id));
+        return ok();
+      }
+      case 'contact-order': {
+        if (!admin) return needAdmin();
+        const list = await getJSON(K.contacts(cid), []);
+        const ids = Array.isArray(body.ids) ? body.ids.map(String) : [];
+        const pos = (x) => { const k = ids.indexOf(x.id); return k < 0 ? 1e6 : k; };
+        await setJSON(K.contacts(cid), list.slice().sort((a, b) => pos(a) - pos(b)));
+        return ok();
       }
       case 'arch-add': {
         if (!admin) return needAdmin();

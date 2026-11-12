@@ -1,7 +1,7 @@
 'use strict';
 
 // Versión de la app (se ve en Información). Arreglos y ajustes: 0.x.y; novedades: 0.x.0.
-const APP_VERSION = '0.22.0';
+const APP_VERSION = '0.23.0';
 const APP_NAME = 'Mi comunidad';
 // Uso de la app en Vercel Analytics: cada sección cuenta como una página virtual (nunca datos).
 const track = (path) => { try { window.va?.('pageview', { path }); } catch (_) { /* sin analítica */ } };
@@ -15,6 +15,13 @@ const GROUP_GAP_MS = 5 * 60e3;
 
 const ICONS = {
   help: '<circle cx="12" cy="12" r="8.5"/><path d="M9.6 9.4a2.5 2.5 0 1 1 3.4 2.3c-.6.3-1 .8-1 1.5v.6"/><circle cx="12" cy="16.6" r=".9" fill="currentColor" stroke="none"/>',
+  briefcase: '<rect x="3.5" y="7.5" width="17" height="12" rx="2"/><path d="M9 7.5V6a1.5 1.5 0 0 1 1.5-1.5h3A1.5 1.5 0 0 1 15 6v1.5M3.5 12.5h17"/>',
+  lift: '<rect x="5" y="3.5" width="14" height="17" rx="2"/><path d="M12 3.5v17M8.5 10l1.5-2 1.5 2M12.5 14l1.5 2 1.5-2"/>',
+  wrench: '<path d="M14.5 6.5a4 4 0 0 0 5 5l-8.8 8.8a2.1 2.1 0 0 1-3-3l8.8-8.8a4 4 0 0 1-2-2z"/>',
+  alert: '<path d="M12 4l9 15.5H3z"/><path d="M12 10v4.5"/><circle cx="12" cy="17.2" r=".9" fill="currentColor" stroke="none"/>',
+  contacts: '<rect x="5" y="3.5" width="14" height="17" rx="2"/><circle cx="12" cy="10" r="2.6"/><path d="M8 16.5c.6-1.8 2.2-2.8 4-2.8s3.4 1 4 2.8M3.5 7.5H5M3.5 12H5M3.5 16.5H5"/>',
+  globe: '<circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c2.4 2.3 3.5 5.2 3.5 8.5s-1.1 6.2-3.5 8.5c-2.4-2.3-3.5-5.2-3.5-8.5s1.1-6.2 3.5-8.5z"/>',
+  up: '<path d="M6.5 14.5L12 9l5.5 5.5"/>',
   reply: '<path d="M10 8.5L5 13l5 4.5"/><path d="M5.5 13H14a5 5 0 0 1 5 5v.5"/>',
   info: '<circle cx="12" cy="12" r="8.5"/><path d="M12 11v5.5"/><circle cx="12" cy="7.8" r=".9" fill="currentColor" stroke="none"/>',
   close: '<path d="M6 6l12 12M18 6L6 18"/>',
@@ -309,6 +316,14 @@ function renderHome() {
         <span class="tile-ico">${icon('poll', 24)}</span>
         <span class="tile-text"><b>Encuestas</b><small>${pendingVotes ? `${plural(pendingVotes, 'pendiente', 'pendientes')} de votar` : openPolls.length ? plural(openPolls.length, 'abierta', 'abiertas') : 'Vota las propuestas'}</small></span>
         ${badge(pendingVotes)}
+      </button>
+      <button class="tile" type="button" data-go="archive">
+        <span class="tile-ico">${icon('archive', 24)}</span>
+        <span class="tile-text"><b>Archivo</b><small>Actas, presupuestos y documentos</small></span>
+      </button>
+      <button class="tile" type="button" data-go="contacts">
+        <span class="tile-ico">${icon('contacts', 24)}</span>
+        <span class="tile-text"><b>Contactos</b><small>${contactsOf().length ? 'Administrador, seguro y más' : admin ? 'Añade el administrador y otros' : 'Administrador, seguro y más'}</small></span>
       </button>
       ${admin ? `
       <button class="tile wide ${reqs ? 'hot' : ''}" type="button" data-go="admin">
@@ -615,7 +630,7 @@ document.addEventListener('visibilitychange', () => {
 // ---------- Secciones a pantalla completa ----------
 
 let view = null; // { name, arg, tick?, timer? }
-const VIEW_TITLES = { help: 'Instrucciones de uso', acta: 'Acta de reunión', archive: 'Archivo', board: 'Tablón de anuncios', contact: 'Contacta con la presidencia', threads: 'Mensajes de vecinos', thread: '', rooms: 'Chats de vecinos', chat: 'Chat de vecinos', polls: 'Encuestas', admin: 'Gestión de la comunidad' };
+const VIEW_TITLES = { contacts: 'Contactos de la comunidad', help: 'Instrucciones de uso', acta: 'Acta de reunión', archive: 'Archivo', board: 'Tablón de anuncios', contact: 'Contacta con la presidencia', threads: 'Mensajes de vecinos', thread: '', rooms: 'Chats de vecinos', chat: 'Chat de vecinos', polls: 'Encuestas', admin: 'Gestión de la comunidad' };
 
 function openView(name, arg) {
   if (!st && name !== 'help') return;
@@ -657,6 +672,7 @@ function renderView() {
   const body = $('view-body');
   const top = body.scrollTop;
   if (view.name === 'help') renderHelp(body);
+  else if (view.name === 'contacts') renderContacts(body);
   else if (view.name === 'board') renderBoard(body);
   else if (view.name === 'polls') renderPolls(body);
   else if (view.name === 'rooms') renderRooms(body);
@@ -4237,7 +4253,6 @@ function actaSpec() {
 function menuItems() {
   const items = [{ icon: 'palette', label: 'Opciones de visualización', run: openDisplaySheet }];
   if (!sess.code) items.push({ icon: 'mail', label: 'Solicitar mi código', run: openRequestSheet });
-  if (sess.code && st) items.push({ icon: 'archive', label: 'Archivo', run: () => openView('archive') });
   if (sess.code && st && isAdmin()) items.push({ icon: 'pdf', label: 'Documentos', run: openDocsSheet });
   if (sess.code && st && isAdmin()) items.push({ icon: 'edit', label: 'Acta de reunión', run: openActa });
   if (sess.code && st) items.push({ icon: pushState() === 'on' ? 'bell' : 'bellOff', label: `Avisos: ${pushState() === 'on' ? 'activados' : 'desactivados'}`, run: openPushSheet });
@@ -4281,6 +4296,102 @@ function openInfoSheet() {
   s.querySelector('[data-close]').addEventListener('click', closeSheet);
 }
 
+// ----- Contactos de la comunidad -----
+// Administrador de fincas, seguro, videovigilancia, ascensor…: los ven todos; los editan los cargos.
+
+const CONTACT_CATS = [
+  ['Administrador de fincas', 'briefcase'],
+  ['Seguro de la comunidad', 'shield'],
+  ['Videovigilancia', 'video'],
+  ['Ascensor', 'lift'],
+  ['Mantenimiento', 'wrench'],
+  ['Limpieza', 'home'],
+  ['Urgencias', 'alert'],
+  ['Otros', 'contacts'],
+];
+const contactIcon = (cat) => (CONTACT_CATS.find((c) => c[0] === cat) || [0, 'contacts'])[1];
+const contactsOf = () => st?.contacts || [];
+const telHref = (p) => `tel:${p.replace(/[^\d+]/g, '')}`;
+
+function renderContacts(body) {
+  const admin = isAdmin();
+  const list = contactsOf();
+  $('view-sub').textContent = st.community.name;
+  body.innerHTML = `
+    ${admin ? `<div class="add-row"><button class="done-btn" type="button" data-new-contact>${icon('plus', 18, 1.8)} Nuevo contacto</button></div>` : ''}
+    ${list.length ? '' : `<div class="empty"><span class="tile-ico">${icon('contacts', 28)}</span><h3>Aún no hay contactos</h3><p>${admin ? 'Añade el administrador de fincas, el seguro, la videovigilancia, el ascensor…' : 'Aquí aparecerán el administrador de fincas, el seguro y otros contactos de la comunidad.'}</p></div>`}
+    ${list.map((c, i) => `
+      <article class="card contact" data-id="${c.id}">
+        <div class="contact-top">
+          <span class="tile-ico">${icon(contactIcon(c.cat), 22)}</span>
+          <span class="contact-name"><small>${esc(c.cat)}</small><b>${esc(c.name)}</b></span>
+          ${admin ? `<span class="contact-tools">
+            ${list.length > 1 ? `<button class="icon-btn sm" type="button" data-up="${i}" ${i ? '' : 'disabled style="visibility:hidden"'} aria-label="Subir en la lista">${icon('up', 16)}</button>` : ''}
+            <button class="icon-btn sm" type="button" data-edit="${c.id}" aria-label="Editar">${icon('edit', 16)}</button>
+          </span>` : ''}
+        </div>
+        <div class="contact-links">
+          ${[c.phone, c.phone2].filter(Boolean).map((p) => `<a class="link-chip" href="${esc(telHref(p))}">${icon('phone', 16)} ${esc(p)}</a>`).join('')}
+          ${c.email ? `<a class="link-chip" href="mailto:${esc(c.email)}">${icon('mail', 16)} <span>${esc(c.email)}</span></a>` : ''}
+          ${c.web ? `<a class="link-chip" href="${esc(c.web)}" target="_blank" rel="noopener noreferrer">${icon('globe', 16)} <span>${esc(c.web.replace(/^https?:\/\/(www\.)?/, '').replace(/\/$/, ''))}</span></a>` : ''}
+        </div>
+        ${c.notes ? `<p class="contact-notes">${linkify(c.notes)}</p>` : ''}
+      </article>`).join('')}`;
+  body.querySelector('[data-new-contact]')?.addEventListener('click', () => openContactEditor(null));
+  body.querySelectorAll('[data-edit]').forEach((b) => b.addEventListener('click', () => openContactEditor(list.find((c) => c.id === b.dataset.edit))));
+  body.querySelectorAll('[data-up]').forEach((b) => b.addEventListener('click', async () => {
+    const i = Number(b.dataset.up);
+    const ids = list.map((c) => c.id);
+    [ids[i - 1], ids[i]] = [ids[i], ids[i - 1]];
+    st.contacts = ids.map((id) => list.find((c) => c.id === id));
+    renderContacts(body);
+    try { await call('contact-order', { ids }); } catch (e) { toast(errorText(e)); refresh(); }
+  }));
+}
+
+function openContactEditor(c) {
+  const sheet = openSheet(c ? 'Editar contacto' : 'Nuevo contacto');
+  const known = CONTACT_CATS.some((x) => x[0] === c?.cat);
+  sheet.innerHTML = `
+    <div class="sheet-head"><h2 class="sheet-title">${c ? 'Editar contacto' : 'Nuevo contacto'}</h2>
+      <button class="icon-btn sm" type="button" data-close aria-label="Cerrar">${icon('close', 18)}</button></div>
+    <p class="field-label">Tipo</p>
+      <select class="select" id="ct-cat">${CONTACT_CATS.map(([n]) => `<option ${(c ? (known ? c.cat === n : n === 'Otros') : n === 'Administrador de fincas') ? 'selected' : ''}>${n}</option>`).join('')}</select>
+    <div class="stack" id="ct-other-wrap" hidden><p class="field-label">¿Qué es?</p><input class="title-input" id="ct-other" maxlength="40" placeholder="Por ejemplo: Fontanero, Jardinería, Gas…" value="${c && !known ? esc(c.cat) : ''}" /></div>
+    <p class="field-label">Nombre o empresa</p><input class="title-input" id="ct-name" maxlength="80" placeholder="Por ejemplo: Fincas García" value="${esc(c?.name || '')}" />
+    <p class="field-label">Teléfono</p><input class="title-input" id="ct-phone" type="tel" maxlength="30" value="${esc(c?.phone || '')}" />
+    <p class="field-label">Otro teléfono (opcional)</p><input class="title-input" id="ct-phone2" type="tel" maxlength="30" placeholder="Urgencias, móvil…" value="${esc(c?.phone2 || '')}" />
+    <p class="field-label">Correo (opcional)</p><input class="title-input" id="ct-email" type="email" maxlength="120" value="${esc(c?.email || '')}" />
+    <p class="field-label">Web (opcional)</p><input class="title-input" id="ct-web" type="url" maxlength="200" placeholder="www.ejemplo.es" value="${esc(c?.web || '')}" />
+    <p class="field-label">Notas (opcional)</p><textarea class="text-input" id="ct-notes" maxlength="600" rows="3" placeholder="Horario, nº de póliza, persona de contacto, cómo dar un parte…">${esc(c?.notes || '')}</textarea>
+    <p class="form-error" id="ct-err" role="alert"></p>
+    <div class="stack">
+      <button class="done-btn" type="button" data-save>Guardar</button>
+      ${c ? `<button class="ghost-btn danger" type="button" data-del>${icon('trash', 18)} Eliminar el contacto</button>` : ''}
+    </div>`;
+  const q = (s) => sheet.querySelector(s);
+  const syncOther = () => { q('#ct-other-wrap').hidden = q('#ct-cat').value !== 'Otros'; };
+  q('#ct-cat').addEventListener('change', syncOther);
+  syncOther();
+  q('[data-close]').addEventListener('click', closeSheet);
+  q('[data-save]').addEventListener('click', async () => {
+    const err = q('#ct-err');
+    const cat = q('#ct-cat').value === 'Otros' ? (q('#ct-other').value.trim() || 'Otros') : q('#ct-cat').value;
+    const data = { id: c?.id, cat, name: q('#ct-name').value.trim(), phone: q('#ct-phone').value.trim(), phone2: q('#ct-phone2').value.trim(), email: q('#ct-email').value.trim(), web: q('#ct-web').value.trim(), notes: q('#ct-notes').value.trim() };
+    const badPhone = [data.phone, data.phone2].find((p) => p && !/^\+?\d[\d\s().-]{2,28}$/.test(p));
+    if (!data.name) { err.textContent = 'Escribe el nombre o la empresa.'; return; }
+    if (badPhone) { err.textContent = `El teléfono «${badPhone}» no es válido.`; return; }
+    if (data.email && !/^[^\s@<>"]{1,64}@[^\s@<>"]+\.[a-z]{2,}$/i.test(data.email)) { err.textContent = 'El correo no es válido.'; return; }
+    if (!(data.phone || data.phone2 || data.email || data.web || data.notes)) { err.textContent = 'Añade al menos un teléfono, un correo, una web o una nota.'; return; }
+    try { await call('contact-save', data); closeSheet(); await refresh(); toast(c ? 'Contacto guardado' : 'Contacto añadido'); } catch (e) { err.textContent = errorText(e); }
+  });
+  q('[data-del]')?.addEventListener('click', () => confirmSheet({
+    title: '¿Eliminar el contacto?', text: `Se quitará «${c.name}» de los contactos de la comunidad.`, ok: 'Eliminar', danger: true,
+    run: async () => { await call('contact-del', { id: c.id }); await refresh(); toast('Contacto eliminado'); },
+  }));
+  if (!c) setTimeout(() => q('#ct-name').focus(), 60);
+}
+
 // ---------- Instrucciones de uso ----------
 // Textos fijos (sin datos de usuario). Cada apartado se abre y se cierra tocándolo.
 
@@ -4322,8 +4433,12 @@ const HELP_ALL = [
     'Algunas encuestas tienen fecha de cierre. Al cerrarse, el resultado se publica en el tablón.',
   ] },
   { icon: 'archive', title: 'Archivo', items: [
-    'En el menú <b>⋯ › Archivo</b> están los documentos importantes de la comunidad (actas, presupuestos, convocatorias…), clasificados por tipo.',
+    'En el cuadro <b>Archivo</b> de la pantalla principal están los documentos importantes de la comunidad (actas, presupuestos, convocatorias…), clasificados por tipo.',
     'Se pueden filtrar por tipo o buscar por nombre, y se ven dentro de la app. Los documentos del archivo no caducan.',
+  ] },
+  { icon: 'contacts', title: 'Contactos', items: [
+    'En el cuadro <b>Contactos</b> están los datos del <b>administrador de fincas</b> y de otros servicios de la comunidad: seguro, videovigilancia, ascensor, mantenimiento, urgencias…',
+    'Toca un teléfono para llamar, un correo para escribir o una web para abrirla. En las notas puede venir el horario, el número de póliza o cómo dar un parte.',
   ] },
   { icon: 'edit', title: 'Firmar un documento', items: [
     'Si la presidencia te pide que firmes un acta, recibirás un aviso y aparecerá en la pantalla principal: <b>«Tienes un documento pendiente de firmar»</b>.',
@@ -4378,6 +4493,9 @@ const HELP_JUNTA = [
     'En el menú <b>⋯ › Acta de reunión</b>: tipo de junta, fecha, hora, lugar, asistentes (presente, representada y por quién), orden del día con textos tipo, observaciones y hora de cierre. Se rellena sola con la última convocatoria del tablón y el borrador se guarda en el móvil.',
     '<b>Firmas</b>: el presidente y el secretario pueden firmar con el dedo en ese móvil, o pulsar <b>«Pedir a otra vivienda»</b> para que firme desde su propio móvil. Mientras tanto se ve «Pendiente de la vivienda…» y la firma llega sola.',
     'Al terminar, <b>Ver PDF</b> o <b>Publicar en el tablón</b> (también entra en el Archivo como «Actas»).',
+  ] },
+  { icon: 'contacts', title: 'Contactos', items: [
+    'En Contactos, <b>Nuevo contacto</b>: tipo (administrador de fincas, seguro, videovigilancia, ascensor…, u otro que escribas), nombre, teléfonos, correo, web y notas. Con el lápiz se editan o eliminan y con la flecha se suben en la lista.',
   ] },
   { icon: 'archive', title: 'Ordenar el Archivo', items: [
     'Los cargos pueden añadir documentos, cambiar su tipo o nombre, quitarlos y <b>ordenarlos arrastrándolos</b> por su asa. Los nuevos entran arriba.',
