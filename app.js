@@ -1,7 +1,7 @@
 'use strict';
 
 // Versión de la app (se ve en Información). Arreglos y ajustes: 0.x.y; novedades: 0.x.0.
-const APP_VERSION = '0.20.1';
+const APP_VERSION = '0.21.0';
 const APP_NAME = 'Mi comunidad';
 // Uso de la app en Vercel Analytics: cada sección cuenta como una página virtual (nunca datos).
 const track = (path) => { try { window.va?.('pageview', { path }); } catch (_) { /* sin analítica */ } };
@@ -15,6 +15,7 @@ const GROUP_GAP_MS = 5 * 60e3;
 
 const ICONS = {
   help: '<circle cx="12" cy="12" r="8.5"/><path d="M9.6 9.4a2.5 2.5 0 1 1 3.4 2.3c-.6.3-1 .8-1 1.5v.6"/><circle cx="12" cy="16.6" r=".9" fill="currentColor" stroke="none"/>',
+  reply: '<path d="M10 8.5L5 13l5 4.5"/><path d="M5.5 13H14a5 5 0 0 1 5 5v.5"/>',
   info: '<circle cx="12" cy="12" r="8.5"/><path d="M12 11v5.5"/><circle cx="12" cy="7.8" r=".9" fill="currentColor" stroke="none"/>',
   close: '<path d="M6 6l12 12M18 6L6 18"/>',
   check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
@@ -630,6 +631,7 @@ function openView(name, arg) {
   $('view-body').innerHTML = '';
   $('composer').hidden = true;
   $('composer-note').hidden = true;
+  setReply(null);
   if (name === 'chat') startChat(arg);
   else if (name === 'contact' || name === 'thread') startDM(name === 'thread' ? arg : null);
   else renderView();
@@ -789,7 +791,15 @@ function openPostSheet() {
 
 // ----- Mensajes (chat de vecinos y conversaciones con la presidencia) -----
 
-const composerState = { send: null };
+const composerState = { send: null, reply: null }; // reply: { s, who, text } al responder a un mensaje
+function setReply(r) {
+  composerState.reply = r;
+  const bar = $('reply-bar');
+  bar.hidden = !r;
+  bar.innerHTML = r ? `<span class="reply-q"><b>Respondiendo a ${esc(r.who)}</b><span>${esc(r.text)}</span></span><button class="icon-btn sm" type="button" data-reply-x aria-label="No responder">${icon('close', 16)}</button>` : '';
+  bar.querySelector('[data-reply-x]')?.addEventListener('click', () => setReply(null));
+  if (r) $('msg-input').focus();
+}
 $('msg-input').addEventListener('input', () => {
   const t = $('msg-input');
   t.style.height = 'auto';
@@ -818,6 +828,7 @@ $('composer').addEventListener('submit', async (e) => {
 });
 function showComposer(on, note = '', placeholder = 'Escribe un mensaje') {
   $('composer').hidden = !on;
+  if (!on && composerState.reply) setReply(null);
   $('composer-note').hidden = on || !note;
   $('composer-note').textContent = note;
   $('msg-input').placeholder = placeholder;
@@ -837,6 +848,7 @@ function messagesHTML(list, intro = '') {
       <div class="msg ${m.mine ? 'me' : 'other'} ${grouped ? 'grouped' : ''} ${m.board ? 'board' : ''}" data-key="${esc(m.key)}">
         <div class="bubble ${m.deleted ? 'deleted' : ''}">
           ${!grouped && m.who ? `<span class="who">${esc(m.who)}${m.role ? ` <span class="role-chip">${ROLE_NAME[m.role]}</span>` : ''}</span>` : ''}
+          ${!m.deleted && m.re ? `<button class="quote" type="button" data-jump="${esc(m.re.key)}"><b>${esc(m.re.who)}</b><span>${m.re.del ? '<i>Mensaje eliminado</i>' : esc(m.re.text)}</span></button>` : ''}
           ${m.deleted ? '' : attachmentsHTML(m.files)}
           <span class="text">${m.deleted ? 'Mensaje eliminado por la presidencia' : linkify(m.text)}</span><span class="meta">${hhmm(m.t)}</span>
         </div>
@@ -881,6 +893,7 @@ let curRoom = null; // { id, name, members, open }
 function startChat(id) {
   chatMsgs = [];
   chatAfter = 0;
+  setReply(null);
   const r = roomById(id);
   if (!r) { setTimeout(openChats, 0); return; }
   curRoom = { ...r };
@@ -889,11 +902,15 @@ function startChat(id) {
   view.tick = pollChat;
   view.timer = setInterval(() => { if (document.visibilityState === 'visible') pollChat(); }, CHAT_EVERY_MS);
   composerState.send = async (text) => {
-    await call('chat-send', { room: curRoom.id, text });
+    const re = composerState.reply?.s;
+    await call('chat-send', { room: curRoom.id, text, re });
+    if (composerState.reply?.s === re) setReply(null);
     await pollChat(true);
   };
   composerState.attach = async (files, text) => {
-    await call('chat-send', { room: curRoom.id, text, files });
+    const re = composerState.reply?.s;
+    await call('chat-send', { room: curRoom.id, text, files, re });
+    if (composerState.reply?.s === re) setReply(null);
     await pollChat(true);
   };
   renderChat(true);
@@ -931,11 +948,12 @@ function renderChat(scroll) {
   const live = roomById(curRoom.id)?.call || 0;
   const intro = (curRoom.junta
     ? `<p class="note banner">${icon('crown', 16)} <span>Chat privado del presidente y el vicepresidente. Ningún vecino puede verlo. Cuando cambien los cargos, se borrará y los nuevos lo empezarán vacío.</span></p>`
-    : `<p class="note banner">${icon('users', 16)} <span>${general ? 'Chat de todas las viviendas.' : `Chat de ${membersLabel(curRoom).toLowerCase()}: solo lo veis quienes estáis en él.`} ${admin ? 'Toca un mensaje para borrarlo o bloquear a esa vivienda.' : 'La presidencia modera el chat.'}</span></p>`)
+    : `<p class="note banner">${icon('users', 16)} <span>${general ? 'Chat de todas las viviendas.' : `Chat de ${membersLabel(curRoom).toLowerCase()}: solo lo veis quienes estáis en él.`} ${admin ? 'Toca un mensaje para responder, borrarlo o bloquear a esa vivienda.' : 'Toca un mensaje para responder. La presidencia modera el chat.'}</span></p>`)
     + (live && gcall?.room !== curRoom.id ? `<div class="gc-banner">${icon('phone', 18)}<span>Llamada en grupo en curso · ${plural(live, 'persona', 'personas')}</span><button class="done-btn sm-done" type="button" data-gc-join>Unirse</button></div>` : '');
   body.innerHTML = chatMsgs.length || !curRoom.open
     ? messagesHTML(chatMsgs.map((m) => ({
       key: m.s, t: m.t, mine: m.mid === me.mid, who: m.mid === me.mid ? '' : m.label, role: m.role, text: m.text, files: m.files, deleted: !!m.del, board: !!m.role,
+      re: m.re && { key: m.re.s, who: m.re.mid === me.mid ? 'Tú' : m.re.label, text: m.re.text, del: m.re.del || chatMsgs.some((x) => x.s === m.re.s && x.del) },
     })), intro) + (!curRoom.open ? `<p class="sys">${icon('lock', 13)} La presidencia ha cerrado el chat</p>` : '')
     : `${intro}<div class="empty"><span class="tile-ico">${icon('chat', 28)}</span><h3>Aún no hay mensajes</h3><p>${general ? 'Saluda a tus vecinos.' : 'Escribe el primer mensaje.'}</p></div>`;
   if (stick) body.scrollTop = body.scrollHeight;
@@ -1018,28 +1036,51 @@ function openRoomEditor(room) {
   };
   draw();
 }
+// Tocar un mensaje del chat: responder (todos), copiar y, para los cargos, moderar.
+// Tocar la cita de una respuesta lleva al mensaje original.
 $('view-body').addEventListener('click', (e) => {
-  if (view?.name !== 'chat' || !isAdmin()) return;
-  if (e.target.closest('a')) return;
+  if (view?.name !== 'chat') return;
+  const q = e.target.closest('[data-jump]');
+  if (q) {
+    const el = $('view-body').querySelector(`.msg[data-key="${CSS.escape(q.dataset.jump)}"]`);
+    if (el) { el.scrollIntoView({ block: 'center', behavior: 'smooth' }); el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash'); } else toast('El mensaje original ya no está en el chat');
+    return;
+  }
+  if (e.target.closest('a, [data-att]') || String(getSelection?.() || '').trim()) return;
   const el = e.target.closest('.msg');
   if (!el) return;
   const m = chatMsgs.find((x) => String(x.s) === el.dataset.key);
   if (!m) return;
   openChatMsgActions(m);
 });
+const msgExcerpt = (m) => m.text || (m.files?.length ? (m.files.every((f) => /^image\//.test(f.type)) ? '📷 Foto' : `📎 ${m.files[0].name}`) : '');
 function openChatMsgActions(m) {
-  const sheet = openSheet('Moderar mensaje');
+  const admin = isAdmin();
+  const mine = m.mid === st.me.mid;
+  const canWrite = !$('composer').hidden;
+  if (m.del && !admin) return;
+  const sheet = openSheet('Mensaje');
   const unit = (st.units || []).find((u) => u.mid === m.mid);
-  const canBlock = unit && !unit.role;
+  const canBlock = admin && unit && !unit.role;
   sheet.innerHTML = `
-    <div class="sheet-head"><h2 class="sheet-title">Vivienda ${esc(m.label)}</h2>
+    <div class="sheet-head"><h2 class="sheet-title">${mine ? 'Tu mensaje' : `Vivienda ${esc(m.label)}`}</h2>
       <button class="icon-btn sm" type="button" data-close aria-label="Cerrar">${icon('close', 18)}</button></div>
-    ${m.del ? '<p class="small muted">Este mensaje ya está eliminado.</p>' : `<p class="small muted" style="white-space:pre-wrap">«${esc(m.text.slice(0, 200))}${m.text.length > 200 ? '…' : ''}»</p>`}
+    ${m.del ? '<p class="small muted">Este mensaje ya está eliminado.</p>' : `<p class="small muted" style="white-space:pre-wrap">«${esc(msgExcerpt(m).slice(0, 200))}${msgExcerpt(m).length > 200 ? '…' : ''}»</p>`}
     <div class="stack">
-      ${m.del ? '' : `<button class="ghost-btn danger" type="button" data-del>${icon('trash', 18)} Borrar el mensaje</button>`}
+      ${!m.del && canWrite ? `<button class="ghost-btn" type="button" data-reply>${icon('reply', 18)} Responder</button>` : ''}
+      ${!m.del && m.text ? `<button class="ghost-btn" type="button" data-copy>${icon('copy', 18)} Copiar el texto</button>` : ''}
+      ${admin && !m.del ? `<button class="ghost-btn danger" type="button" data-del>${icon('trash', 18)} Borrar el mensaje</button>` : ''}
       ${canBlock ? `<button class="ghost-btn ${unit.blocked ? '' : 'danger'}" type="button" data-block>${icon('ban', 18)} ${unit.blocked ? 'Desbloquear' : 'Bloquear'} a la vivienda ${esc(m.label)} en los chats</button>` : ''}
     </div>`;
   sheet.querySelector('[data-close]').addEventListener('click', closeSheet);
+  sheet.querySelector('[data-reply]')?.addEventListener('click', () => {
+    closeSheet();
+    setReply({ s: m.s, who: mine ? 'ti' : m.label, text: msgExcerpt(m).slice(0, 160) });
+  });
+  sheet.querySelector('[data-copy]')?.addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText(m.text); toast('Texto copiado'); } catch (_) { toast('No se ha podido copiar'); }
+    closeSheet();
+  });
   sheet.querySelector('[data-del]')?.addEventListener('click', async () => {
     try { await call('chat-del', { room: curRoom.id, s: m.s }); m.del = 1; closeSheet(); renderChat(); toast('Mensaje borrado'); } catch (e) { toast(errorText(e)); }
   });
@@ -4233,6 +4274,7 @@ const HELP_ALL = [
   { icon: 'chat', title: 'Chats de vecinos', items: [
     'Al entrar verás la lista de chats en los que está tu vivienda. Los crea la presidencia: pueden ser para toda la comunidad o solo para algunas viviendas (por ejemplo, la comisión de obras).',
     'Se pueden enviar mensajes, <b>fotos y archivos</b> (duran un mes).',
+    '<b>Responder a un mensaje concreto</b>: tócalo y elige «Responder». Tu mensaje saldrá con la cita del original; al tocar la cita, el chat te lleva a él. También se puede copiar el texto.',
     '<b>Llamadas en grupo</b>: dentro de un chat, el botón del teléfono empieza una llamada de solo voz y el de la cámara una videollamada (hasta 6 personas). Los demás reciben un aviso y ven el botón «Unirse».',
     'La presidencia modera los chats: puede cerrarlos, borrar mensajes y bloquear a una vivienda que no respete las normas.',
   ] },

@@ -698,7 +698,10 @@ module.exports = async (req, res) => {
         const after = Math.max(0, Number(body.after) || 0);
         const raw = await redis('LRANGE', K.roomChat(cid, room.id), after ? -KEEP_CHAT : -200, -1);
         const all = (raw || []).map((m) => JSON.parse(m));
-        const msgs = all.filter((m) => m.s > after).map((m) => ({ ...m, label: unitName(com, m.mid), role: roleOf(com, m.mid), text: m.del ? '' : m.text, files: m.del ? undefined : m.files }));
+        // respuestas: la cita guarda un extracto del original; si este se borró, la cita sale vacía
+        const delS = new Set(all.filter((m) => m.del).map((m) => m.s));
+        const reOut = (re) => (re ? { s: re.s, mid: re.mid, label: unitName(com, re.mid), text: delS.has(re.s) ? '' : re.text, del: delS.has(re.s) || undefined } : undefined);
+        const msgs = all.filter((m) => m.s > after).map((m) => ({ ...m, label: unitName(com, m.mid), role: roleOf(com, m.mid), text: m.del ? '' : m.text, files: m.del ? undefined : m.files, re: m.del ? undefined : reOut(m.re) }));
         // los mensajes borrados después se avisan aparte para quitarlos de la pantalla
         const dels = all.filter((m) => m.del && m.s <= after).map((m) => m.s);
         return res.status(200).json({ msgs, dels, open: room.open !== false, blocked: !!me.blocked, name: room.name, members: room.members });
@@ -713,8 +716,16 @@ module.exports = async (req, res) => {
         if (await limited(`vec:rl:msg:${cid}:${mid}`, MSGS_PER_MIN, 60)) return bad('too-many', 429);
         let files = [];
         try { files = await attachFiles(cid, body.files); } catch (e) { return bad('file-missing', 409); }
+        // respuesta a un mensaje concreto del mismo chat
+        let re;
+        const reS = Number(body.re);
+        if (Number.isInteger(reS) && reS > 0) {
+          const list = await redis('LRANGE', K.roomChat(cid, room.id), 0, -1);
+          const o = (list || []).map((m) => JSON.parse(m)).find((m) => m.s === reS);
+          if (o && !o.del) re = { s: o.s, mid: o.mid, text: short(o.text || (o.files?.length ? filesNote(o.files) : ''), 160) };
+        }
         const s = await redis('INCR', K.roomSeq(cid, room.id));
-        const msg = { s, t: Date.now(), mid, text, ...(files.length ? { files } : {}) };
+        const msg = { s, t: Date.now(), mid, text, ...(files.length ? { files } : {}), ...(re ? { re } : {}) };
         await pipeline([['RPUSH', K.roomChat(cid, room.id), JSON.stringify(msg)], ['LTRIM', K.roomChat(cid, room.id), -KEEP_CHAT, -1]]);
         await notify(cid, com, room.members || 'all', mid, {
           title: `${room.name} · ${com.name}`,
