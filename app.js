@@ -1,7 +1,7 @@
 'use strict';
 
 // Versión de la app (se ve en Información). Arreglos y ajustes: 0.x.y; novedades: 0.x.0.
-const APP_VERSION = '0.23.0';
+const APP_VERSION = '0.24.0';
 const APP_NAME = 'Mi comunidad';
 // Uso de la app en Vercel Analytics: cada sección cuenta como una página virtual (nunca datos).
 const track = (path) => { try { window.va?.('pageview', { path }); } catch (_) { /* sin analítica */ } };
@@ -2601,20 +2601,35 @@ async function resumePush() {
     renderHome();
   } catch (_) { /* se intentará la próxima vez */ }
 }
-function openInstallSheet() {
+// first: aviso al abrir la app en el navegador del móvil (como en las otras apps), con «No mostrar más».
+// then: lo que se abre al cerrarlo (por ejemplo, la solicitud del código si llegó con el enlace).
+const INSTALL_HINT_KEY = 'micomunidad:installHint';
+function openInstallSheet(first = false, then = null) {
   const steps = isIOS
     ? [['share', 'Pulsa el botón <b>Compartir</b> de Safari (abajo en el iPhone, arriba en el iPad).'],
       ['plus', 'Elige <b>Añadir a pantalla de inicio</b> y pulsa <b>Añadir</b>.'],
-      ['bell', 'Abre la app desde su icono y pulsa <b>Activar avisos</b>.']]
+      ['bell', first ? 'Ábrela desde su icono, junto a tus apps. Así también podrás recibir avisos.' : 'Abre la app desde su icono y pulsa <b>Activar avisos</b>.']]
     : [['dots', 'Pulsa el menú <b>⋮</b> del navegador, arriba a la derecha.'],
       ['plus', 'Elige <b>Instalar aplicación</b> o <b>Añadir a pantalla de inicio</b>.'],
-      ['bell', 'Abre la app desde su icono y pulsa <b>Activar avisos</b>.']];
+      ['bell', first ? 'Confirma con <b>Instalar</b> y ábrela desde su icono, junto a tus apps.' : 'Abre la app desde su icono y pulsa <b>Activar avisos</b>.']];
   const s = openCenter(`
     <span class="logo-slot">${logoSVG(56)}</span>
     <h2 class="sheet-title">Añade la app a tu pantalla de inicio</h2>
+    ${first ? '<p class="small muted">Así la abrirás como una app más, a pantalla completa y con un solo toque.</p>' : ''}
     <ol class="install-steps">${steps.map(([ic, t]) => `<li><span class="step-icon">${icon(ic, 20, 1.5)}</span><span>${t}</span></li>`).join('')}</ol>
-    <div class="center-actions"><button class="done-btn" type="button" data-close>Entendido</button></div>`);
-  s.querySelector('[data-close]').addEventListener('click', closeSheet);
+    ${first ? '<label class="no-more"><input type="checkbox" data-no-more /> No mostrar más</label>' : ''}
+    <div class="center-actions"><button class="done-btn" type="button" data-close>${first ? 'Aceptar' : 'Entendido'}</button></div>`);
+  s.querySelector('[data-close]').addEventListener('click', () => {
+    if (s.querySelector('[data-no-more]')?.checked) save(INSTALL_HINT_KEY, 'off');
+    closeSheet();
+    then?.();
+  });
+}
+// Al abrir la app en el navegador de un móvil (sin instalar), se explica cómo añadirla a la pantalla de inicio
+function maybeShowInstallHint(then = null) {
+  if (!(isIOS || isAndroid) || isStandalone() || load(INSTALL_HINT_KEY, null) === 'off') return then?.();
+  pushAsked = true; // el aviso de activar avisos ya lo explica: no se pide además en esta apertura
+  openInstallSheet(true, then);
 }
 
 // Abrir una sección desde un aviso (?go=… o mensaje del service worker)
@@ -3241,36 +3256,137 @@ async function openPdfViewer(pdf, name) {
       <button class="icon-btn back-btn" type="button" data-close aria-label="Cerrar">${icon('close', 20, 1.6)}</button>
       <div class="view-head"><b>${esc(name)}</b><small>${plural(pdf.pages.length, 'página', 'páginas')}</small></div>
       <div class="view-actions">
-        <button class="icon-btn sm" type="button" data-zoom aria-label="Ampliar">${icon('zoom', 18)}</button>
         <button class="icon-btn sm" type="button" data-share aria-label="Compartir, guardar o imprimir">${icon('share', 18)}</button>
       </div>
     </header>
-    <div class="pdf-pages"></div>`;
+    <div class="pdf-pages"><div class="pz"></div></div>
+    ${ZOOM_CTL}`;
   document.body.append(el);
   document.body.classList.add('in-pdf');
-  let zoom = 1;
-  const pages = el.querySelector('.pdf-pages');
-  const draw = () => {
-    const dpr = Math.min(3, window.devicePixelRatio || 1);
-    const cssW = Math.min(820, pages.clientWidth - 24) * zoom;
-    pages.classList.toggle('zoomed', zoom > 1);
-    pages.innerHTML = '';
-    pdf.pages.forEach((ops) => {
-      const c = document.createElement('canvas');
-      c.width = Math.round(cssW * dpr);
-      c.height = Math.round(cssW * dpr * PAGE_H / PAGE_W);
-      c.style.width = `${cssW}px`;
-      c.style.height = `${cssW * PAGE_H / PAGE_W}px`;
-      drawPdfPage(c.getContext('2d'), ops, c.width / PAGE_W, images);
-      pages.append(c);
-    });
-  };
-  draw();
-  const close = () => { el.remove(); document.body.classList.remove('in-pdf'); window.removeEventListener('resize', draw); };
-  window.addEventListener('resize', draw);
+  const box = el.querySelector('.pdf-pages');
+  const inner = box.firstElementChild;
+  const cp = canvasPages(box, inner);
+  const zoom = setupDocZoom(el, box, inner, (z) => cp.settle(z));
+  zoom.show();
+  const close = () => { el.remove(); document.body.classList.remove('in-pdf'); window.removeEventListener('resize', zoom.refit); };
+  window.addEventListener('resize', zoom.refit);
   el.querySelector('[data-close]').addEventListener('click', close);
-  el.querySelector('[data-zoom]').addEventListener('click', () => { zoom = zoom > 1 ? 1 : 2; draw(); });
   el.querySelector('[data-share]').addEventListener('click', () => deliverFile(bytes, name, 'application/pdf'));
+  for (const ops of pdf.pages) await cp.add({ w: PAGE_W, h: PAGE_H, draw: (c, scale) => drawPdfPage(c.getContext('2d'), ops, scale, images) });
+}
+
+// ----- Zoom de los visores (como en PayCTRL) -----
+// Pellizco con dos dedos (centrado donde se pellizca), doble toque o doble clic (100 % ↔ 250 %),
+// pellizco en el trackpad o Ctrl + rueda, y los botones − / +. Al soltar, las páginas que se ven
+// se vuelven a dibujar con más resolución para que el texto salga nítido.
+const ZOOM_CTL = `<div class="zoom-ctl" role="group" aria-label="Zoom" hidden>
+  <button class="z-out" type="button" aria-label="Reducir" disabled>−</button><span class="z-val">100 %</span><button class="z-in" type="button" aria-label="Ampliar">+</button></div>`;
+const viewerBaseW = (box) => Math.max(200, Math.min(820, box.clientWidth - 24));
+function setupDocZoom(el, box, inner, onSettle) {
+  const MIN = 1, MAX = 5;
+  let z = 1, settle = 0;
+  const ctl = el.querySelector('.zoom-ctl');
+  const label = ctl.querySelector('.z-val');
+  const size = () => { inner.style.width = `${Math.round(viewerBaseW(box) * z)}px`; };
+  const later = () => { clearTimeout(settle); settle = setTimeout(() => onSettle(z), 220); };
+  const apply = (nz, cx = box.clientWidth / 2, cy = box.clientHeight / 2) => {
+    nz = Math.min(MAX, Math.max(MIN, nz));
+    if (Math.abs(nz - z) < 0.001) return;
+    const px = box.scrollLeft + cx - inner.offsetLeft, py = box.scrollTop + cy - inner.offsetTop; // punto bajo el dedo
+    const k = nz / z;
+    z = nz;
+    size();
+    box.scrollLeft = px * k + inner.offsetLeft - cx;
+    box.scrollTop = py * k + inner.offsetTop - cy;
+    label.textContent = `${Math.round(z * 100)} %`;
+    ctl.querySelector('.z-out').disabled = z <= MIN;
+    ctl.querySelector('.z-in').disabled = z >= MAX;
+    later();
+  };
+  const local = (x, y) => { const r = box.getBoundingClientRect(); return [x - r.left, y - r.top]; };
+  size();
+  ctl.querySelector('.z-in').addEventListener('click', () => apply(z + 0.5));
+  ctl.querySelector('.z-out').addEventListener('click', () => apply(z - 0.5));
+  box.addEventListener('dblclick', (e) => apply(z > 1 ? 1 : 2.5, ...local(e.clientX, e.clientY)));
+  box.addEventListener('wheel', (e) => {
+    if (!e.ctrlKey) return; // pellizco en el trackpad (o Ctrl + rueda)
+    e.preventDefault();
+    apply(z * Math.exp(-e.deltaY * 0.01), ...local(e.clientX, e.clientY));
+  }, { passive: false });
+  box.addEventListener('scroll', () => { if (z > 1) later(); }, { passive: true });
+  // Safari: que el pellizco no amplíe la página entera
+  ['gesturestart', 'gesturechange', 'gestureend'].forEach((ev) => el.addEventListener(ev, (e) => e.preventDefault(), { passive: false }));
+  let pinch = null, lastTap = 0, moved = false;
+  const dist = (t) => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+  const mid = (t) => local((t[0].clientX + t[1].clientX) / 2, (t[0].clientY + t[1].clientY) / 2);
+  box.addEventListener('touchstart', (e) => {
+    moved = false;
+    if (e.touches.length === 2) pinch = { d: dist(e.touches), z };
+  }, { passive: true });
+  box.addEventListener('touchmove', (e) => {
+    moved = true;
+    if (e.touches.length !== 2 || !pinch) return;
+    e.preventDefault();
+    apply(pinch.z * dist(e.touches) / pinch.d, ...mid(e.touches));
+  }, { passive: false });
+  box.addEventListener('touchend', (e) => {
+    if (e.touches.length < 2) pinch = null;
+    if (e.touches.length || e.changedTouches.length !== 1 || moved) return;
+    const now = Date.now();
+    if (now - lastTap < 300) {
+      e.preventDefault();
+      const t = e.changedTouches[0];
+      apply(z > 1 ? 1 : 2.5, ...local(t.clientX, t.clientY));
+      lastTap = 0;
+    } else lastTap = now;
+  });
+  return { show: () => { ctl.hidden = false; }, refit: () => { size(); later(); } };
+}
+// Páginas en lienzos: se dibujan aparte y se copian (sin parpadeo) a la resolución del zoom; las que
+// quedan lejos de la vista vuelven a la normal para no gastar memoria (el iPhone tiene un tope).
+function canvasPages(box, inner) {
+  const slots = [];
+  let gen = 0;
+  const dpr = () => Math.min(window.devicePixelRatio || 1, 2.5);
+  const pxFor = (s, z) => Math.round(Math.min(viewerBaseW(box) * z * dpr(), 4096, Math.sqrt(14e6 * s.w / s.h)));
+  const paint = async (s, px) => {
+    if (s.px === px) return;
+    s.px = px;
+    const off = document.createElement('canvas');
+    off.width = px;
+    off.height = Math.round(px * s.h / s.w);
+    await s.draw(off, px / s.w);
+    if (s.px !== px || !box.isConnected) return;
+    s.c.width = off.width;
+    s.c.height = off.height;
+    s.c.getContext('2d').drawImage(off, 0, 0);
+    off.width = off.height = 0;
+  };
+  const near = (s) => {
+    const r = s.c.getBoundingClientRect(), b = box.getBoundingClientRect();
+    return r.bottom > b.top - b.height / 2 && r.top < b.bottom + b.height / 2;
+  };
+  return {
+    async add(it) {
+      const s = { ...it, c: document.createElement('canvas'), px: 0 };
+      s.c.setAttribute('aria-label', `Página ${slots.length + 1}`);
+      s.c.width = pxFor(s, 1);
+      s.c.height = Math.round(s.c.width * s.h / s.w);
+      slots.push(s);
+      inner.append(s.c);
+      await paint(s, pxFor(s, 1));
+    },
+    async settle(z) {
+      const my = ++gen;
+      const drawn = slots.filter((s) => s.px);
+      const vis = drawn.filter(near);
+      for (const s of vis) { if (my !== gen || !box.isConnected) return; await paint(s, pxFor(s, z)); }
+      for (const s of drawn) {
+        if (my !== gen || !box.isConnected) return;
+        if (!vis.includes(s) && s.px !== pxFor(s, 1)) await paint(s, pxFor(s, 1));
+      }
+    },
+  };
 }
 
 // ----- Visor de los archivos del tablón (como en DocCTRL) -----
@@ -3306,45 +3422,33 @@ async function openFileViewer(f) {
       <button class="icon-btn back-btn" type="button" data-close aria-label="Cerrar">${icon('close', 20, 1.6)}</button>
       <div class="view-head"><b>${esc(f.name)}</b><small>${fmtSize(f.size)}</small></div>
       <div class="view-actions">
-        <button class="icon-btn sm" type="button" data-zoom aria-label="Ampliar" hidden>${icon('zoom', 18)}</button>
         <button class="icon-btn sm" type="button" data-share aria-label="Compartir, guardar o imprimir" disabled>${icon('share', 18)}</button>
       </div>
     </header>
-    <div class="pdf-pages"><p class="v-msg">Cargando…</p></div>`;
+    <div class="pdf-pages"><p class="v-msg">Cargando…</p></div>
+    ${ZOOM_CTL}`;
   document.body.append(el);
   document.body.classList.add('in-pdf');
   const pages = el.querySelector('.pdf-pages');
+  // PDF e imágenes van en una capa que se amplía con los dedos
+  const zoomable = () => {
+    pages.innerHTML = '<div class="pz"></div>';
+    const inner = pages.firstElementChild;
+    zoom = setupDocZoom(el, pages, inner, (z) => cp?.settle(z));
+    zoom.show();
+    return inner;
+  };
+  let zoom = null;
+  let cp = null;
   const msg = (t) => { pages.innerHTML = `<p class="v-msg">${esc(t)}</p>`; };
   let alive = true;
   let bytes = null;
   let pdf = null;
-  let zoom = 1;
   const close = () => { alive = false; el.remove(); document.body.classList.remove('in-pdf'); window.removeEventListener('resize', onResize); };
   el.querySelector('[data-close]').addEventListener('click', close);
   el.querySelector('[data-share]').addEventListener('click', () => { if (bytes) deliverFile(bytes, f.name, f.type); });
-  const drawPdf = async () => {
-    const turn = (drawPdf.turn = (drawPdf.turn || 0) + 1);
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    const cssW = Math.min(820, pages.clientWidth - 24) * zoom;
-    pages.classList.toggle('zoomed', zoom > 1);
-    pages.innerHTML = '';
-    for (let n = 1; n <= Math.min(pdf.numPages, MAX_PDF_PAGES) && alive && turn === drawPdf.turn; n++) {
-      const page = await pdf.getPage(n);
-      const viewport = page.getViewport({ scale: (cssW * dpr) / page.getViewport({ scale: 1 }).width });
-      const canvas = document.createElement('canvas');
-      canvas.width = Math.round(viewport.width);
-      canvas.height = Math.round(viewport.height);
-      canvas.style.width = `${cssW}px`;
-      canvas.style.height = `${viewport.height / dpr}px`;
-      pages.append(canvas);
-      await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
-    }
-    if (pdf.numPages > MAX_PDF_PAGES && turn === drawPdf.turn) pages.insertAdjacentHTML('beforeend', `<p class="v-msg">Se muestran las primeras ${MAX_PDF_PAGES} páginas de ${pdf.numPages}. Para ver el resto, compártelo o descárgalo.</p>`);
-  };
-  let resizeTimer = 0;
-  const onResize = () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => { if (pdf && alive) drawPdf(); }, 250); };
+  const onResize = () => zoom?.refit();
   window.addEventListener('resize', onResize);
-  el.querySelector('[data-zoom]').addEventListener('click', () => { zoom = zoom > 1 ? 1 : 2; drawPdf(); });
   try { bytes = await fetchFile(f); } catch (e) { if (alive) msg(e.code === 'gone' ? 'Este archivo ya no está disponible: los adjuntos de los chats y las conversaciones se guardan un mes.' : errorText(e)); return; }
   if (!alive) return;
   el.querySelector('[data-share]').disabled = false;
@@ -3354,15 +3458,22 @@ async function openFileViewer(f) {
       pdf = await (await loadPdfjs()).getDocument({ data: bytes.slice(), isEvalSupported: false }).promise;
       if (!alive) return;
       el.querySelector('.view-head small').textContent = `${plural(pdf.numPages, 'página', 'páginas')} · ${fmtSize(f.size)}`;
-      el.querySelector('[data-zoom]').hidden = false;
-      await drawPdf();
+      cp = canvasPages(pages, zoomable());
+      for (let n = 1; n <= Math.min(pdf.numPages, MAX_PDF_PAGES) && alive; n++) {
+        const page = await pdf.getPage(n);
+        const vp = page.getViewport({ scale: 1 });
+        await cp.add({ w: vp.width, h: vp.height, draw: (c, scale) => page.render({ canvasContext: c.getContext('2d'), viewport: page.getViewport({ scale }) }).promise });
+      }
+      if (pdf.numPages > MAX_PDF_PAGES && alive) pages.insertAdjacentHTML('beforeend', `<p class="v-msg">Se muestran las primeras ${MAX_PDF_PAGES} páginas de ${pdf.numPages}. Para ver el resto, compártelo o descárgalo.</p>`);
     } catch (err) {
       if (alive) msg('No se ha podido mostrar este PDF aquí (¿tiene contraseña?). Pulsa compartir para abrirlo con otra app.');
     }
   } else if (isImageFile(f)) {
     const url = URL.createObjectURL(new Blob([bytes], { type: f.type || 'image/jpeg' }));
-    pages.innerHTML = '<img class="v-img" alt="">';
-    const img = pages.firstElementChild;
+    const img = document.createElement('img');
+    img.className = 'v-img';
+    img.alt = '';
+    zoomable().append(img);
     img.onerror = () => { if (alive) msg('Esta imagen no se puede ver aquí. Pulsa compartir para abrirla con otra app.'); };
     img.src = url;
   } else if (isTextFile(f) && bytes.length < 500000) {
@@ -4572,12 +4683,12 @@ function openDisplaySheet() {
 
 applyDisplay();
 renderHome();
-if (sess.code) { refresh(); startPolling(); }
+if (sess.code) { refresh(); startPolling(); setTimeout(() => { if (!document.querySelector('.sheet-backdrop')) maybeShowInstallHint(); }, 400); }
 else if (linkPub) {
-  // Llegó con el enlace de la comunidad: se muestra su nombre y se abre la solicitud
+  // Llegó con el enlace de la comunidad: se muestra su nombre y se abre la solicitud (tras el aviso de instalar)
   api('community', { pub: linkPub }).then(({ name }) => { linkName = name; renderHome(); }).catch(() => {});
-  setTimeout(openRequestSheet, 300);
-}
+  setTimeout(() => maybeShowInstallHint(openRequestSheet), 300);
+} else setTimeout(() => maybeShowInstallHint(), 300);
 if ('serviceWorker' in navigator && window.isSecureContext) {
   navigator.serviceWorker.register('sw.js').then(() => { refreshPush(); resumePush(); }).catch(() => {});
   navigator.serviceWorker.addEventListener('message', (e) => {
