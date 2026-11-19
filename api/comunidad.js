@@ -14,7 +14,7 @@
 //   POST { action: 'community', pub }                     -> { name }            (nombre a partir del código público)
 //   Con el código de la vivienda en `code`:
 //   POST { action: 'state', code }                        -> todo lo de la pantalla principal
-//   POST { action: 'post' | 'post-del' | 'post-pin', code, … }            (tablón; solo cargos)
+//   POST { action: 'post' | 'post-edit' | 'post-del' | 'post-pin', code, … } (tablón; solo cargos; editar no avisa)
 //   POST { action: 'chat-poll', code, room?, after }      -> { msgs, open, blocked }   (room: id del chat)
 //   POST { action: 'chat-send', code, room?, text }       -> { s }
 //   POST { action: 'chat-del' | 'chat-open' | 'block', code, room?, … }   (moderación; solo cargos)
@@ -694,6 +694,40 @@ module.exports = async (req, res) => {
         // Los documentos del tablón entran solos en el Archivo, con el tipo elegido al publicar
         if (files.length) await archiveAdd(cid, files, cleanText(body.archCat, 40) || NO_CAT, mid, postId);
         await notify(cid, com, 'all', mid, { title: com.name, body: `📌 ${short(title || text, 120)}`, go: 'board', tag: 'board' });
+        return ok();
+      }
+      // Editar un anuncio ya publicado: título, texto y archivos. No se envía ningún aviso;
+      // el anuncio conserva su fecha y su sitio, y se marca como editado.
+      case 'post-edit': {
+        if (!admin) return needAdmin();
+        const board = await getJSON(K.board(cid), []);
+        const post = board.find((p) => p.id === body.id);
+        if (!post) return bad('gone', 404);
+        if (post.kind === 'result') return bad('forbidden', 403); // el resultado de una encuesta no se toca
+        const title = cleanText(body.title, 140);
+        const text = cleanText(body.text, MAX_POST);
+        const keepIds = new Set(Array.isArray(body.keep) ? body.keep : []);
+        const kept = (post.files || []).filter((f) => keepIds.has(f.fid));
+        const added = cleanFiles(body.files).filter((f) => !kept.some((k) => k.fid === f.fid));
+        const files = [...kept, ...added].slice(0, MAX_FILES);
+        if (!title && !text && !files.length) return bad();
+        if (added.length) {
+          const keys = fileKeys(cid, added);
+          const exists = await pipeline(keys.map((k) => ['EXISTS', k]));
+          if (exists.some((e) => !Number(e))) return bad('file-missing', 409);
+          await pipeline(keys.map((k) => ['PERSIST', k]));
+        }
+        const removed = (post.files || []).filter((f) => !files.some((k) => k.fid === f.fid));
+        post.title = title;
+        post.text = text;
+        if (files.length) post.files = files; else delete post.files;
+        post.edited = Date.now();
+        post.editedBy = mid;
+        await setJSON(K.board(cid), board);
+        if (added.length) await archiveAdd(cid, added, cleanText(body.archCat, 40) || NO_CAT, mid, post.id);
+        // Los que se quitan siguen en el Archivo si estaban allí; si no, se borran
+        const keys = removed.length ? keysNotArchived(cid, removed, await archivedFids(cid)) : [];
+        if (keys.length) await redis('DEL', ...keys);
         return ok();
       }
       case 'post-del':

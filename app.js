@@ -1,7 +1,7 @@
 'use strict';
 
 // Versión de la app (se ve en Información). Arreglos y ajustes: 0.x.y; novedades: 0.x.0.
-const APP_VERSION = '0.24.0';
+const APP_VERSION = '0.25.0';
 const APP_NAME = 'Mi comunidad';
 // Uso de la app en Vercel Analytics: cada sección cuenta como una página virtual (nunca datos).
 const track = (path) => { try { window.va?.('pageview', { path }); } catch (_) { /* sin analítica */ } };
@@ -700,17 +700,19 @@ function renderBoard(body) {
           ${p.pin ? `<span class="chip gold">${icon('pin', 12, 1.6)} Fijado</span>` : ''}
           ${p.kind === 'result' ? `<span class="chip">${icon('poll', 12, 1.6)} Encuesta</span>` : ''}
           ${p.t > seenBefore && p.by !== st.me.mid ? '<span class="chip ok">Nuevo</span>' : ''}
-          <time>${esc(ROLE_BOARD[p.role] || '')} · ${when(p.t)}</time>
+          <time>${esc(ROLE_BOARD[p.role] || '')} · ${when(p.t)}</time>${p.edited ? `<span class="chip" title="Editado: ${esc(when(p.edited))}">${icon('edit', 12, 1.6)} Editado</span>` : ''}
         </div>
         ${p.title ? `<h3>${esc(p.title)}</h3>` : ''}
         ${p.text ? `<p class="post-text">${linkify(p.text)}</p>` : ''}
         ${(p.files || []).length ? `<div class="files">${p.files.map((f, i) => `<button class="file-chip" type="button" data-file="${p.id}:${i}">${icon(/pdf/.test(f.type) ? 'pdf' : 'clip', 18)}<span><b>${esc(f.name)}</b><small>${fmtSize(f.size)}</small></span>${icon('download', 16)}</button>`).join('')}</div>` : ''}
         ${admin ? `<div class="post-actions">
+          ${p.kind === 'result' ? '' : `<button class="ghost-btn sm-btn" type="button" data-edit-post="${p.id}">${icon('edit', 15)} Editar</button>`}
           <button class="ghost-btn sm-btn" type="button" data-pin="${p.id}" data-on="${p.pin ? 0 : 1}">${icon('pin', 15)} ${p.pin ? 'Quitar de fijados' : 'Fijar arriba'}</button>
           <button class="ghost-btn sm-btn danger" type="button" data-del="${p.id}">${icon('trash', 15)} Eliminar</button>
         </div>` : ''}
       </article>`).join('') : `<div class="empty"><span class="tile-ico">${icon('board', 28)}</span><h3>Sin anuncios</h3><p>Aquí aparecerán las noticias de la comunidad.</p></div>`}`;
-  body.querySelector('[data-new]')?.addEventListener('click', openPostSheet);
+  body.querySelector('[data-new]')?.addEventListener('click', () => openPostSheet());
+  body.querySelectorAll('[data-edit-post]').forEach((b) => b.addEventListener('click', () => openPostSheet(st.board.find((p) => p.id === b.dataset.editPost))));
   body.querySelectorAll('[data-pin]').forEach((b) => b.addEventListener('click', async () => {
     try { await call('post-pin', { id: b.dataset.pin, pin: b.dataset.on === '1' }); await refresh(); } catch (e) { toast(errorText(e)); }
   }));
@@ -728,14 +730,15 @@ function renderBoard(body) {
   })));
 }
 
-function openPostSheet() {
-  const sheet = openSheet('Nuevo anuncio');
-  const files = []; // { file }
+// edit: anuncio ya publicado que se corrige (título, texto y archivos). Al guardarlo no se avisa a nadie.
+function openPostSheet(edit = null) {
+  const sheet = openSheet(edit ? 'Editar anuncio' : 'Nuevo anuncio');
+  const files = (edit?.files || []).map((f) => ({ name: f.name, type: f.type, size: f.size, old: f })); // old: ya subido
   sheet.innerHTML = `
-    <div class="sheet-head"><h2 class="sheet-title">Nuevo anuncio</h2>
+    <div class="sheet-head"><h2 class="sheet-title">${edit ? 'Editar anuncio' : 'Nuevo anuncio'}</h2>
       <button class="icon-btn sm" type="button" data-close aria-label="Cerrar">${icon('close', 18)}</button></div>
-    <input class="title-input" id="po-title" maxlength="140" placeholder="Título" autocomplete="off" />
-    <textarea class="text-input" id="po-text" maxlength="6000" rows="6" placeholder="Escribe el anuncio para todos los vecinos"></textarea>
+    <input class="title-input" id="po-title" maxlength="140" placeholder="Título" autocomplete="off" value="${esc(edit?.title || '')}" />
+    <textarea class="text-input" id="po-text" maxlength="6000" rows="6" placeholder="Escribe el anuncio para todos los vecinos">${esc(edit?.text || '')}</textarea>
     <div class="files" id="po-files"></div>
     <button class="ghost-btn" type="button" id="po-attach">${icon('clip', 18)} Adjuntar archivos (actas, circulares…)</button>
     <input type="file" id="po-input" multiple hidden />
@@ -745,9 +748,9 @@ function openPostSheet() {
       ${catDatalist('po-cats')}
       <div class="row-btns">${catList().slice(0, 6).map((c) => `<button class="ghost-btn sm-btn" type="button" data-pick-cat="${esc(c)}">${esc(c)}</button>`).join('')}</div>
     </div>
-    <label class="check-row"><input type="checkbox" id="po-pin" /> <span>Fijarlo arriba del tablón</span></label>
+    ${edit ? '<p class="small muted">Los cambios se verán en el tablón sin enviar ningún aviso a los vecinos. El anuncio mantiene su fecha y se marca como editado.</p>' : '<label class="check-row"><input type="checkbox" id="po-pin" /> <span>Fijarlo arriba del tablón</span></label>'}
     <p class="form-error" id="po-err" role="alert"></p>
-    <div class="editor-actions"><span class="small muted">Firmado como ${ROLE_BOARD[st.me.role]}</span><button class="done-btn" type="button" id="po-ok" disabled>Publicar</button></div>`;
+    <div class="editor-actions"><span class="small muted">${edit ? `Publicado por ${esc(ROLE_BOARD[edit.role] || '')}` : `Firmado como ${ROLE_BOARD[st.me.role]}`}</span><button class="done-btn" type="button" id="po-ok" disabled>${edit ? 'Guardar cambios' : 'Publicar'}</button></div>`;
   sheet.querySelector('[data-close]').addEventListener('click', closeSheet);
   const title = sheet.querySelector('#po-title');
   const text = sheet.querySelector('#po-text');
@@ -760,7 +763,7 @@ function openPostSheet() {
       <button class="icon-btn sm" type="button" data-rm="${i}" aria-label="Quitar">${icon('close', 15)}</button></div>`).join('');
     sheet.querySelectorAll('[data-rm]').forEach((b) => b.addEventListener('click', () => { files.splice(Number(b.dataset.rm), 1); drawFiles(); }));
     sheet.querySelector('#po-attach').hidden = files.length >= 5;
-    sheet.querySelector('#po-catbox').hidden = !files.length;
+    sheet.querySelector('#po-catbox').hidden = !files.some((f) => !f.old); // el tipo solo hace falta para los nuevos
     check();
   };
   [title, text].forEach((i) => i.addEventListener('input', check));
@@ -779,7 +782,7 @@ function openPostSheet() {
   ok.addEventListener('click', async () => {
     const cat = sheet.querySelector('#po-cat').value.trim();
     // Los documentos se guardan también en el Archivo: se avisa si falta el tipo
-    if (files.length && !cat && !ok.dataset.sure) {
+    if (files.some((f) => !f.old) && !cat && !ok.dataset.sure) {
       err.textContent = 'Los documentos se guardarán también en el Archivo. Indica su tipo (Actas, Presupuestos…) o pulsa otra vez para publicar sin tipo.';
       ok.dataset.sure = '1';
       ok.textContent = 'Publicar sin tipo';
@@ -790,18 +793,21 @@ function openPostSheet() {
     err.textContent = '';
     try {
       const metas = [];
-      for (const [i, f] of files.entries()) {
-        ok.textContent = `Subiendo ${i + 1} de ${files.length}…`;
+      const fresh = files.filter((f) => !f.old);
+      for (const [i, f] of fresh.entries()) {
+        ok.textContent = `Subiendo ${i + 1} de ${fresh.length}…`;
         metas.push(await uploadFile(f.name, f.type, new Uint8Array(await f.arrayBuffer())));
       }
-      ok.textContent = 'Publicando…';
-      await call('post', { title: title.value, text: text.value, pin: sheet.querySelector('#po-pin').checked, files: metas, archCat: cat });
+      ok.textContent = edit ? 'Guardando…' : 'Publicando…';
+      if (edit) await call('post-edit', { id: edit.id, title: title.value, text: text.value, keep: files.filter((f) => f.old).map((f) => f.old.fid), files: metas, archCat: cat });
+      else await call('post', { title: title.value, text: text.value, pin: sheet.querySelector('#po-pin').checked, files: metas, archCat: cat });
       archDocs = null;
       closeSheet();
       await refresh();
-      toast('Anuncio publicado');
-    } catch (e) { err.textContent = errorText(e); ok.disabled = false; ok.textContent = 'Publicar'; }
+      toast(edit ? 'Anuncio actualizado, sin enviar aviso' : 'Anuncio publicado');
+    } catch (e) { err.textContent = errorText(e); ok.disabled = false; ok.textContent = edit ? 'Guardar cambios' : 'Publicar'; }
   });
+  drawFiles();
   setTimeout(() => title.focus(), 60);
 }
 
@@ -4573,7 +4579,7 @@ const HELP_ALL = [
 const HELP_JUNTA = [
   { icon: 'board', title: 'Publicar en el tablón', items: [
     'En el tablón, <b>Nuevo anuncio</b>: título, texto y hasta 5 archivos de 10 MB. Todos los vecinos reciben un aviso.',
-    'Cada anuncio se puede <b>fijar arriba</b> o eliminar. Los archivos adjuntos entran solos en el Archivo (con su tipo) y se conservan aunque se borre el anuncio.',
+    'Cada anuncio se puede <b>editar</b> (título, texto y archivos; se marca como «Editado» y <b>no se envía ningún aviso</b>), <b>fijar arriba</b> o eliminar. Los archivos adjuntos entran solos en el Archivo (con su tipo) y se conservan aunque se borre el anuncio.',
   ] },
   { icon: 'inbox', title: 'Mensajes de vecinos', items: [
     'Todas las conversaciones privadas de las viviendas con la presidencia. Las sin leer salen resaltadas.',
