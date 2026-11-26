@@ -7,6 +7,7 @@ try {
   var light = d.theme === 'light' || (d.theme !== 'dark' && matchMedia('(prefers-color-scheme: light)').matches);
   document.documentElement.dataset.theme = light ? 'light' : 'dark';
   document.documentElement.dataset.wall = d.wall || 'cielo';
+  document.documentElement.dataset.text = d.text || 'normal';
 } catch (e) {}
 
 // Vercel Web Analytics: sin cookies; solo visitas y las secciones que se abren. Se quita de la

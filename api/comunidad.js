@@ -610,6 +610,10 @@ module.exports = async (req, res) => {
     const ok = (extra = {}) => res.status(200).json({ ok: true, ...extra });
     const needAdmin = () => bad('forbidden', 403);
 
+    // El administrador de la app mantiene la comunidad (gestión, tablón, archivo, contactos, documentos…)
+    // pero no entra en los chats de vecinos ni en las conversaciones con la presidencia (ni sus llamadas)
+    if (isAdm && /^(chat-|room-|gc-|call-|dm-|ice$)/.test(action)) return needAdmin();
+
     switch (action) {
       case 'subscribe': {
         const sub = body.sub;
@@ -661,8 +665,11 @@ module.exports = async (req, res) => {
           sigReqs: (await getJSON(K.sigreq(cid), [])).filter((r) => r.to === mid || admin).map((r) => ({ ...r, toLabel: unitName(com, r.to), sig: admin ? r.sig : undefined })),
           dm: idx[mid] || null,
         };
-        if (admin) {
+        if (isAdm) { out.rooms = []; out.rings = []; out.dm = null; }
+        if (admin && !isAdm) {
           out.threads = Object.entries(idx).filter(([m]) => com.units[m]).map(([m, v]) => ({ mid: m, label: unitName(com, m), ...v })).sort((a, b) => b.t - a.t);
+        }
+        if (admin) {
           out.requests = reqs.slice().reverse();
           out.adminApp = com.admin ? { set: com.admin.set || 0, seen: com.admin.seen || 0 } : null;
           out.units = Object.entries(com.units).map(([m, u]) => ({ mid: m, label: u.label, role: roleOf(com, m), blocked: !!u.blocked, issued: u.issued || 0, seen: u.seen || 0, hasCode: !!u.c, rented: !!u.rented }))

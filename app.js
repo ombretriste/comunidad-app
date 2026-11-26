@@ -1,7 +1,7 @@
 'use strict';
 
 // Versión de la app (se ve en Información). Arreglos y ajustes: 0.x.y; novedades: 0.x.0.
-const APP_VERSION = '0.25.0';
+const APP_VERSION = '0.26.0';
 const APP_NAME = 'Mi comunidad';
 // Uso de la app en Vercel Analytics: cada sección cuenta como una página virtual (nunca datos).
 const track = (path) => { try { window.va?.('pageview', { path }); } catch (_) { /* sin analítica */ } };
@@ -267,6 +267,7 @@ function renderHome() {
   }
   const me = st.me;
   const admin = !!me.role;
+  const appAdmin = me.role === 'admin'; // sin chats ni conversaciones con la presidencia
   const newPosts = st.board.filter((p) => p.t > sess.seen.board && p.by !== me.mid).length;
   const openPolls = st.polls.filter((p) => !p.closed);
   const pendingVotes = me.role === 'admin' ? 0 : openPolls.filter((p) => p.mine === null).length; // el administrador no vota
@@ -296,7 +297,7 @@ function renderHome() {
         <span class="tile-text"><b>Tablón de anuncios</b><small>${newPosts ? plural(newPosts, 'anuncio nuevo', 'anuncios nuevos') : 'Noticias de la comunidad'}</small></span>
         ${badge(newPosts)}
       </button>
-      ${admin ? `
+      ${appAdmin ? '' : admin ? `
       <button class="tile ${threadsNew ? 'hot' : ''}" type="button" data-go="threads">
         <span class="tile-ico">${icon('inbox', 24)}</span>
         <span class="tile-text"><b>Mensajes de vecinos</b><small>${threadsNew ? plural(threadsNew, 'conversación sin leer', 'conversaciones sin leer') : 'Privados para la presidencia'}</small></span>
@@ -307,11 +308,11 @@ function renderHome() {
         <span class="tile-text"><b>Contacta con la presidencia</b><small>${dmNew ? 'Tienes respuesta' : 'Solo lo leen el presidente y el vicepresidente'}</small></span>
         ${badge(dmNew)}
       </button>`}
-      <button class="tile ${chatNew ? 'hot' : ''}" type="button" data-go="chat">
+      ${appAdmin ? '' : `<button class="tile ${chatNew ? 'hot' : ''}" type="button" data-go="chat">
         <span class="tile-ico">${icon('chat', 24)}</span>
         <span class="tile-text"><b>Chats de vecinos</b><small>${me.blocked ? 'Estás bloqueado en los chats' : chatNew ? plural(chatNew, 'chat con mensajes nuevos', 'chats con mensajes nuevos') : rooms.length ? plural(rooms.length, 'chat', 'chats') : admin ? 'Crea el primer chat' : 'Aún no hay chats'}</small></span>
         ${badge(chatNew)}
-      </button>
+      </button>`}
       <button class="tile ${pendingVotes ? 'hot' : ''}" type="button" data-go="polls">
         <span class="tile-ico">${icon('poll', 24)}</span>
         <span class="tile-text"><b>Encuestas</b><small>${pendingVotes ? `${plural(pendingVotes, 'pendiente', 'pendientes')} de votar` : openPolls.length ? plural(openPolls.length, 'abierta', 'abiertas') : 'Vota las propuestas'}</small></span>
@@ -2084,12 +2085,12 @@ function renderAdmin(body) {
     <p class="section-title">Administrador de la app</p>
     <section class="card stack">
       ${st.me.role === 'admin'
-    ? `<p class="small">Has entrado como administrador de la app. Puedes mantener la app (tablón, chats, encuestas, viviendas y códigos, documentos), firmando como «Administración de la app». No votas ni ves el chat «Presidencia».</p>
+    ? `<p class="small">Has entrado como administrador de la app. Puedes mantener la app (gestión de viviendas y códigos, tablón, encuestas, archivo, contactos y documentos), firmando como «Administración de la app». No votas ni entras en los chats de vecinos ni en las conversaciones con la presidencia.</p>
       <button class="ghost-btn" type="button" data-admin-set>${icon('key', 18)} Cambiar mi clave</button>`
     : st.adminApp
       ? `<p class="small">Hay un administrador configurado${st.adminApp.seen ? ` · último acceso: ${when(st.adminApp.seen)}` : ' · aún no ha entrado'}. Entra con el código de la comunidad (${esc(st.community.pub)}) y su clave desde «Acceso de administrador», en la pantalla de inicio.</p>
       <div class="row-btns"><button class="ghost-btn sm-btn" type="button" data-admin-set>${icon('key', 15)} Cambiar la clave</button><button class="ghost-btn sm-btn danger" type="button" data-admin-off>${icon('trash', 15)} Quitar el administrador</button></div>`
-      : `<p class="small muted">Un vecino de confianza puede mantener la app con una clave propia, por ejemplo si el presidente y el vicepresidente pierden sus códigos. Puede publicar y gestionar, pero firma como «Administración de la app», no vota ni ve el chat «Presidencia».</p>
+      : `<p class="small muted">Un vecino de confianza puede mantener la app con una clave propia, por ejemplo si el presidente y el vicepresidente pierden sus códigos. Puede publicar y gestionar (tablón, archivo, contactos, documentos, viviendas y códigos), pero firma como «Administración de la app», no vota ni entra en los chats de vecinos ni en las conversaciones con la presidencia.</p>
       <button class="ghost-btn" type="button" data-admin-set>${icon('key', 18)} Configurar administrador</button>`}
     </section>`;
 
@@ -2267,7 +2268,7 @@ function openUnitSheet(u) {
       <button class="ghost-btn" type="button" data-rent>${icon('home', 18)} ${u.rented ? 'Ya no está alquilada' : 'Marcar como alquilada'}</button>
       <button class="ghost-btn" type="button" data-rename-unit>${icon('edit', 18)} Cambiar el nombre</button>
       <button class="ghost-btn" type="button" data-code>${icon('key', 18)} Generar un código nuevo</button>
-      ${u.mid !== st.me.mid ? `<button class="ghost-btn" type="button" data-write>${icon('mail', 18)} Escribir a esta vivienda</button>` : ''}
+      ${u.mid !== st.me.mid && st.me.role !== 'admin' ? `<button class="ghost-btn" type="button" data-write>${icon('mail', 18)} Escribir a esta vivienda</button>` : ''}
       ${u.role ? '' : `<button class="ghost-btn ${u.blocked ? '' : 'danger'}" type="button" data-block>${icon('ban', 18)} ${u.blocked ? 'Desbloquear en el chat' : 'Bloquear en el chat'}</button>
       <button class="ghost-btn danger" type="button" data-del>${icon('trash', 18)} Eliminar la vivienda</button>`}
     </div>`;
@@ -2642,6 +2643,7 @@ function maybeShowInstallHint(then = null) {
 function goTo(go) {
   if (!go || !st) return;
   closeSheet();
+  if (st.me.role === 'admin' && /^(thread|chat|contact|threads|rooms)/.test(go)) return; // el administrador de la app no entra en chats
   if (go.startsWith('thread:')) { if (isAdmin()) openView('thread', go.slice(7)); return; }
   if (go.startsWith('chat:')) { if (roomById(go.slice(5))) openView('chat', go.slice(5)); else openChats(); return; }
   if (go === 'chat') { openChats(); return; }
@@ -4567,12 +4569,12 @@ const HELP_ALL = [
     'En el <b>iPhone</b> solo funcionan con la app añadida a la pantalla de inicio. En <b>Android</b>, si aparecen como bloqueadas, hay que permitirlas en los ajustes del navegador o del móvil (Notificaciones).',
   ] },
   { icon: 'palette', title: 'Apariencia', items: [
-    'En el menú <b>⋯ › Opciones de visualización</b> se elige el modo claro u oscuro y el color del fondo.',
+    'En el menú <b>⋯ › Opciones de visualización</b> se elige el modo claro u oscuro, el <b>tamaño de la letra</b> (Normal, Grande o Muy grande, para toda la app) y el color del fondo.',
   ] },
   { icon: 'shield', title: 'Privacidad', items: [
     'Nadie da su nombre ni su teléfono: los vecinos se ven solo por su vivienda (por ejemplo, «3º B»).',
     'El código es <b>personal</b> de tu vivienda: no lo compartas con personas que no vivan en ella.',
-    'Si hay alguien de confianza que mantiene la app («Administrador de la app»), puede gestionarla, pero no vota ni lee el chat de la presidencia.',
+    'Si hay alguien de confianza que mantiene la app («Administrador de la app»), puede gestionarla, pero no vota ni entra en los chats ni en las conversaciones con la presidencia.',
   ] },
 ];
 
@@ -4600,7 +4602,7 @@ const HELP_JUNTA = [
     '<b>Viviendas y locales</b>: alta por plantas (puertas A/B/C/D, Izquierda/Derecha…), bajos y locales, o una por línea. De cada una se puede cambiar el nombre, marcarla como alquilada (su código se entrega al propietario), generar un código nuevo, bloquearla o darla de baja.',
     '<b>Tarjetas de códigos</b> en PDF para dejar en los buzones (4 por hoja).',
     '<b>Cambio de presidente y vicepresidente</b>: ambos tienen los mismos permisos. Si entra una vivienda nueva en los cargos, se borran las conversaciones privadas y el chat «Presidencia»; si solo se intercambian los cargos, no.',
-    '<b>Administrador de la app</b> (opcional): una persona de confianza que entra con el código de la comunidad y una clave, desde «Acceso de administrador». Tiene los permisos de gestión, pero no es una vivienda.',
+    '<b>Administrador de la app</b> (opcional): una persona de confianza que entra con el código de la comunidad y una clave, desde «Acceso de administrador». Tiene los permisos de gestión (viviendas y códigos, tablón, encuestas, archivo, contactos, documentos y acta), pero no es una vivienda: no vota ni entra en los chats de vecinos ni en las conversaciones con la presidencia.',
   ] },
   { icon: 'pdf', title: 'Documentos', items: [
     'En el menú <b>⋯ › Documentos</b> se crean PDF formales con el icono de la comunidad: aviso de la app (con el enlace y el código), convocatorias de junta ordinaria y extraordinaria (con autorización de representación), reunión de la comisión de obras, listado de asistencia, comunicado libre y las tarjetas de todos los códigos.',
@@ -4634,7 +4636,7 @@ function renderHelp(body) {
     ${junta ? `<h3 class="section-title">Para la presidencia</h3>${HELP_JUNTA.map(sec).join('')}` : ''}`;
 }
 
-// ---------- Opciones de visualización (modo y fondo) ----------
+// ---------- Opciones de visualización (modo, tamaño de la letra y fondo) ----------
 
 const WALLS = {
   cielo: { name: 'Cielo', c: ['96 165 250', '191 219 254', '37 99 235', '56 189 248'] },
@@ -4643,12 +4645,14 @@ const WALLS = {
   lavanda: { name: 'Lavanda', c: ['167 139 250', '221 214 254', '139 92 246', '236 72 153'] },
 };
 const lightQuery = matchMedia('(prefers-color-scheme: light)');
-let display = { theme: 'auto', wall: 'cielo', ...load(DISPLAY_KEY, {}) };
+let display = { theme: 'auto', wall: 'cielo', text: 'normal', ...load(DISPLAY_KEY, {}) };
+const TEXT_SIZES = [['normal', 'Normal'], ['grande', 'Grande'], ['muy-grande', 'Muy grande']];
 if (!WALLS[display.wall]) display.wall = 'cielo';
 function applyDisplay() {
   const light = display.theme === 'light' || (display.theme === 'auto' && lightQuery.matches);
   document.documentElement.dataset.theme = light ? 'light' : 'dark';
   document.documentElement.dataset.wall = display.wall;
+  document.documentElement.dataset.text = TEXT_SIZES.some(([k]) => k === display.text) ? display.text : 'normal';
   document.querySelector('meta[name="theme-color"]').setAttribute('content', light ? '#f3f7fd' : '#070b14');
 }
 lightQuery.addEventListener('change', () => { if (display.theme === 'auto') applyDisplay(); });
@@ -4672,6 +4676,10 @@ function openDisplaySheet() {
           `<button type="button" data-theme-opt="${v}" class="${display.theme === v ? 'on' : ''}" aria-pressed="${display.theme === v}">${l}</button>`).join('')}
       </div>
       <p class="muted small">${display.theme === 'auto' ? 'Sigue el modo claro u oscuro del sistema.' : '&nbsp;'}</p>
+      <p class="opt-label">Tamaño de la letra</p>
+      <div class="seg" role="group" aria-label="Tamaño de la letra">
+        ${TEXT_SIZES.map(([v, l]) => `<button type="button" data-text-opt="${v}" class="${display.text === v ? 'on' : ''}" aria-pressed="${display.text === v}">${l}</button>`).join('')}
+      </div>
       <p class="opt-label">Fondo</p>
       <div class="walls">
         ${Object.entries(WALLS).map(([k, w]) =>
@@ -4679,6 +4687,7 @@ function openDisplaySheet() {
       </div>
       <div class="body-actions"><button class="done-btn" type="button" data-done>Listo</button></div>`;
     sheet.querySelectorAll('[data-theme-opt]').forEach((b) => b.addEventListener('click', () => { display.theme = b.dataset.themeOpt; save(DISPLAY_KEY, display); applyDisplay(); draw(); }));
+    sheet.querySelectorAll('[data-text-opt]').forEach((b) => b.addEventListener('click', () => { display.text = b.dataset.textOpt; save(DISPLAY_KEY, display); applyDisplay(); draw(); }));
     sheet.querySelectorAll('[data-wall-opt]').forEach((b) => b.addEventListener('click', () => { display.wall = b.dataset.wallOpt; save(DISPLAY_KEY, display); applyDisplay(); draw(); }));
     sheet.querySelector('[data-done]').addEventListener('click', closeSheet);
   };
