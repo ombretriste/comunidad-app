@@ -806,3 +806,7 @@ body.in-call { overflow: hidden; }
 /* Aviso de instalar la app (al abrirla en el navegador del móvil) */
 .no-more { display: inline-flex; align-items: center; gap: 8px; font-size: calc(14px * var(--fs)); color: var(--muted); cursor: pointer; margin-top: 2px; }
 .no-more input { width: 20px; height: 20px; margin: 0; accent-color: var(--accent); }
+
+/* Doble perfil (vecino y administrador de la app) */
+.profile-switch { margin-bottom: 12px; background: var(--surface); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); }
+.profile-switch button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; overflow: hidden; text-overflow: ellipsis; }

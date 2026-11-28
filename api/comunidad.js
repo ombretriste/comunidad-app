@@ -650,7 +650,7 @@ module.exports = async (req, res) => {
         const idx = {};
         for (let i = 0; i < (dmIndex || []).length; i += 2) idx[dmIndex[i]] = JSON.parse(dmIndex[i + 1]);
         const out = {
-          community: { name: com.name, pub: com.pub, chatOpen: com.chatOpen, iconV: com.iconV || 0 },
+          community: { name: com.name, pub: com.pub, chatOpen: com.chatOpen, iconV: com.iconV || 0, hasAdmin: !!com.admin },
           me: { mid, label: me.label, role, blocked: !!me.blocked },
           board: board.slice().reverse().map((p) => ({ ...p, byLabel: p.by ? unitName(com, p.by) : '' })),
           contacts,

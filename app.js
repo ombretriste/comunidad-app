@@ -1,7 +1,7 @@
 'use strict';
 
 // Versión de la app (se ve en Información). Arreglos y ajustes: 0.x.y; novedades: 0.x.0.
-const APP_VERSION = '0.26.0';
+const APP_VERSION = '0.27.0';
 const APP_NAME = 'Mi comunidad';
 // Uso de la app en Vercel Analytics: cada sección cuenta como una página virtual (nunca datos).
 const track = (path) => { try { window.va?.('pageview', { path }); } catch (_) { /* sin analítica */ } };
@@ -27,6 +27,7 @@ const ICONS = {
   close: '<path d="M6 6l12 12M18 6L6 18"/>',
   check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
+  swap: '<path d="M4 8h13l-3.5-3.5M20 16H7l3.5 3.5"/>',
   palette: '<path d="M12 3a9 9 0 1 0 0 18c1.1 0 1.6-.9 1.2-1.8-.5-1-.1-2.2 1.1-2.2H17a4 4 0 0 0 4-4c0-5.5-4-10-9-10z"/><circle cx="7.5" cy="11" r="1.2"/><circle cx="10" cy="7" r="1.2"/><circle cx="15" cy="7.5" r="1.2"/>',
   board: '<rect x="3.5" y="4.5" width="17" height="12" rx="1.5"/><path d="M7 8.5h6M7 12h10"/><path d="M8.5 16.5l-1.5 3.5M15.5 16.5l1.5 3.5"/><circle cx="17" cy="8.3" r=".9" fill="currentColor" stroke="none"/>',
   mail: '<rect x="3.5" y="5.5" width="17" height="13" rx="2"/><path d="M4 7l8 6 8-6"/>',
@@ -216,14 +217,51 @@ let offline = false;
 const persist = () => save(SESSION_KEY, sess);
 const isAdmin = () => !!st?.me?.role;
 
-function login(code, firstState) {
+// Doble perfil: el vecino que además es administrador de la app guarda las dos sesiones en el
+// dispositivo (su vivienda y la de administrador) y cambia de una a otra. La que no se ve queda aparcada.
+const PARKED_KEY = 'micomunidad:parked';
+let parked = load(PARKED_KEY, null); // la otra sesión { code, seen, cache } o null
+const saveParked = () => save(PARKED_KEY, parked);
+const profileName = (s) => (s?.cache?.me?.role === 'admin' ? 'Administrador' : s?.cache?.me ? `Vivienda ${s.cache.me.label}` : 'Otro perfil');
+const isAdminSess = (s) => s?.cache?.me?.role === 'admin';
+// Los avisos van siempre con el perfil de vecino (el administrador no recibe avisos)
+const pushCode = () => (isAdminSess(sess) && parked?.code ? parked.code : sess.code);
+function switchProfile(quiet) {
+  if (!parked?.code) return;
+  sess.cache = st;
+  [sess, parked] = [{ ...parked, seen: { ...emptySeen(), ...(parked.seen || {}) } }, sess];
+  st = sess.cache;
+  persist();
+  saveParked();
+  closeView(true);
+  closeSheet();
+  renderHome();
+  window.scrollTo(0, 0);
+  refresh();
+  track('/cambiar-perfil');
+  if (!quiet) toast(`Perfil: ${profileName(sess)}`);
+}
+
+// keep: entrar con un segundo perfil sin perder el actual (queda aparcado para cambiar después)
+function login(code, firstState, keep = false) {
+  if (keep && sess.code) { sess.cache = st; parked = sess; saveParked(); }
   sess = { code, seen: emptySeen(), cache: firstState || null };
   st = sess.cache;
   persist();
   track('/entrar');
 }
 function logout(silent) {
-  if (pushPref.on || pushPref.device) disablePush(true);
+  // Con dos perfiles solo se sale del que se ve; los avisos se quitan si eran de este perfil
+  if ((pushPref.on || pushPref.device) && !(parked?.code && isAdminSess(sess))) disablePush(true);
+  if (parked?.code) {
+    sess = { code: '', seen: emptySeen(), cache: null };
+    switchProfile(true);
+    parked = null;
+    saveParked();
+    renderHome();
+    if (!silent) toast('Has salido de ese perfil en este dispositivo');
+    return;
+  }
   comIcon = null;
   save(ICON_KEY, null);
   sess = { code: '', seen: emptySeen(), cache: null };
@@ -281,6 +319,10 @@ function renderHome() {
 
   home.innerHTML = `
     ${offline ? `<p class="offline">${icon('info', 16)} Sin conexión: datos de la última visita</p>` : ''}
+    ${parked?.code ? `<div class="seg profile-switch" role="tablist" aria-label="Perfil">
+      ${[[sess, true], [parked, false]].sort((a, b) => isAdminSess(a[0]) - isAdminSess(b[0])).map(([s, on]) =>
+        `<button type="button" role="tab" class="${on ? 'on' : ''}" aria-selected="${on}" ${on ? '' : 'data-switch'}>${icon(isAdminSess(s) ? 'key' : 'home', 16, 1.7)} ${esc(profileName(s))}</button>`).join('')}
+    </div>` : ''}
     <section class="card hello">
       <span class="unit-badge">${me.role === 'admin' ? icon('key', 24, 1.6) : esc(me.label)}</span>
       <div class="hello-text">
@@ -345,6 +387,7 @@ function renderHome() {
 }
 
 $('home').addEventListener('click', (e) => {
+  if (e.target.closest('[data-switch]')) return switchProfile();
   if (e.target.closest('[data-push]')) return enablePush();
   if (e.target.closest('[data-signreq]')) return openSignRequest(myPendingSigs()[0]);
   const go = e.target.closest('[data-go]');
@@ -492,15 +535,49 @@ function openAdminLogin() {
     try {
       const { code } = await api('admin-login', { pub: pub.value, clave: sheet.querySelector('#al-clave').value });
       const state = await api('state', { code });
-      login(code, state);
+      const keep = !!sess.code && !isAdminSess(sess); // ya hay una vivienda: se guarda como segundo perfil
+      login(code, state, keep);
       offline = false;
       closeSheet();
       renderHome();
       startPolling();
-      toast(`Has entrado como administrador de ${state.community.name}`);
+      toast(keep ? 'Perfil de administrador añadido. Cambia de perfil desde arriba.' : `Has entrado como administrador de ${state.community.name}`);
     } catch (e) { sheet.querySelector('#al-err').textContent = errorText(e); ok.disabled = false; }
   });
   setTimeout(() => pub.focus(), 60);
+}
+// El administrador añade su vivienda como segundo perfil (con el código que le dio la presidencia)
+function openAddUnitProfile() {
+  const sheet = openSheet('Añadir mi vivienda');
+  sheet.innerHTML = `
+    <div class="sheet-head"><h2 class="sheet-title">Añadir mi vivienda</h2>
+      <button class="icon-btn sm" type="button" data-close aria-label="Cerrar">${icon('close', 18)}</button></div>
+    <p class="small muted">Si además eres vecino, escribe el código de tu vivienda. Tendrás los dos perfiles en este dispositivo y podrás pasar de uno a otro desde arriba de la pantalla principal.</p>
+    <input class="title-input code-input" id="au-code" maxlength="16" placeholder="XXXX-XXXX-XXXX" autocomplete="off" autocapitalize="characters" spellcheck="false" aria-label="Código de tu vivienda" />
+    <p class="form-error" id="au-err" role="alert"></p>
+    <button class="done-btn big" type="button" id="au-ok" disabled>Añadir</button>`;
+  sheet.querySelector('[data-close]').addEventListener('click', closeSheet);
+  const input = sheet.querySelector('#au-code');
+  const ok = sheet.querySelector('#au-ok');
+  input.addEventListener('input', () => {
+    const raw = input.value.toUpperCase().replace(/[^0-9A-Z]/g, '').slice(0, 12);
+    const nice = raw.match(/.{1,4}/g)?.join('-') || '';
+    if (input.value !== nice) input.value = nice;
+    ok.disabled = raw.length !== 12;
+    sheet.querySelector('#au-err').textContent = '';
+  });
+  ok.addEventListener('click', async () => {
+    ok.disabled = true;
+    try {
+      const state = await api('state', { code: input.value });
+      login(input.value, state, true); // el de administrador queda aparcado
+      closeSheet();
+      renderHome();
+      refreshPush();
+      toast(`Vivienda ${state.me.label} añadida. Cambia de perfil desde arriba.`);
+    } catch (e) { sheet.querySelector('#au-err').textContent = errorText(e); ok.disabled = false; }
+  });
+  setTimeout(() => input.focus(), 60);
 }
 function openAdminSet() {
   const self = st.me.role === 'admin';
@@ -2464,7 +2541,7 @@ async function subscribePush() {
   let sub = await reg.pushManager.getSubscription();
   if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: unb64u(publicKey) });
   if (!pushPref.device) { pushPref.device = randomHex(16); save(PUSH_KEY, pushPref); }
-  await call('subscribe', { device: pushPref.device, sub: sub.toJSON() });
+  await api('subscribe', { code: pushCode(), device: pushPref.device, sub: sub.toJSON() });
   await kvSet('push', { device: pushPref.device });
 }
 async function enablePush() {
@@ -2643,6 +2720,7 @@ function maybeShowInstallHint(then = null) {
 function goTo(go) {
   if (!go || !st) return;
   closeSheet();
+  if (st.me.role === 'admin' && parked?.code && go !== 'admin') { switchProfile(true); linkGo = go; return; } // los avisos son del perfil de vecino
   if (st.me.role === 'admin' && /^(thread|chat|contact|threads|rooms)/.test(go)) return; // el administrador de la app no entra en chats
   if (go.startsWith('thread:')) { if (isAdmin()) openView('thread', go.slice(7)); return; }
   if (go.startsWith('chat:')) { if (roomById(go.slice(5))) openView('chat', go.slice(5)); else openChats(); return; }
@@ -4375,9 +4453,13 @@ function menuItems() {
   if (sess.code && st && isAdmin()) items.push({ icon: 'pdf', label: 'Documentos', run: openDocsSheet });
   if (sess.code && st && isAdmin()) items.push({ icon: 'edit', label: 'Acta de reunión', run: openActa });
   if (sess.code && st) items.push({ icon: pushState() === 'on' ? 'bell' : 'bellOff', label: `Avisos: ${pushState() === 'on' ? 'activados' : 'desactivados'}`, run: openPushSheet });
+  if (sess.code && st && parked?.code) items.push({ icon: 'swap', label: `Cambiar a ${profileName(parked)}`, run: () => switchProfile() });
+  else if (sess.code && st && st.me.role === 'admin') items.push({ icon: 'home', label: 'Añadir mi vivienda', run: openAddUnitProfile });
+  else if (sess.code && st && st.community.hasAdmin) items.push({ icon: 'key', label: 'Acceso de administrador', run: openAdminLogin });
   items.push({ icon: 'help', label: 'Instrucciones de uso', run: () => openView('help') });
-  if (sess.code && st) items.push({ icon: 'logout', label: 'Salir de esta comunidad', danger: true, run: () => confirmSheet({
-    title: '¿Salir de la comunidad?', text: 'Se quitará tu código de este dispositivo. Para volver a entrar necesitarás escribirlo de nuevo.', ok: 'Salir', danger: true,
+  if (sess.code && st) items.push({ icon: 'logout', label: parked?.code ? `Salir del perfil ${profileName(sess)}` : 'Salir de esta comunidad', danger: true, run: () => confirmSheet({
+    title: parked?.code ? `¿Salir del perfil ${profileName(sess)}?` : '¿Salir de la comunidad?',
+    text: parked?.code ? `Se quitará este perfil del dispositivo y seguirás con ${profileName(parked)}.` : 'Se quitará tu código de este dispositivo. Para volver a entrar necesitarás escribirlo de nuevo.', ok: 'Salir', danger: true,
     run: async () => logout(),
   }) });
   items.push({ icon: 'info', label: 'Información', run: openInfoSheet });
@@ -4603,6 +4685,7 @@ const HELP_JUNTA = [
     '<b>Tarjetas de códigos</b> en PDF para dejar en los buzones (4 por hoja).',
     '<b>Cambio de presidente y vicepresidente</b>: ambos tienen los mismos permisos. Si entra una vivienda nueva en los cargos, se borran las conversaciones privadas y el chat «Presidencia»; si solo se intercambian los cargos, no.',
     '<b>Administrador de la app</b> (opcional): una persona de confianza que entra con el código de la comunidad y una clave, desde «Acceso de administrador». Tiene los permisos de gestión (viviendas y códigos, tablón, encuestas, archivo, contactos, documentos y acta), pero no es una vivienda: no vota ni entra en los chats de vecinos ni en las conversaciones con la presidencia.',
+    'Si el administrador también es vecino, puede tener <b>los dos perfiles</b> en el mismo móvil: desde su vivienda, <b>⋯ › Acceso de administrador</b>; o desde el perfil de administrador, <b>⋯ › Añadir mi vivienda</b>. Arriba de la pantalla principal aparece un selector para pasar de uno a otro (también en <b>⋯ › Cambiar a…</b>). Los avisos llegan siempre al perfil de vecino.',
   ] },
   { icon: 'pdf', title: 'Documentos', items: [
     'En el menú <b>⋯ › Documentos</b> se crean PDF formales con el icono de la comunidad: aviso de la app (con el enlace y el código), convocatorias de junta ordinaria y extraordinaria (con autorización de representación), reunión de la comisión de obras, listado de asistencia, comunicado libre y las tarjetas de todos los códigos.',
